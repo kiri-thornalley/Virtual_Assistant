@@ -100,18 +100,13 @@ if not api_key:
     raise ValueError("API key is not set. Please check your environment variables.")
 
 #Define location for where to call the API for, as latitude and longitude - currently set Grimsby, North East Lincolnshire. 
-# To change, pull lat. and long. from Google Maps
-latitude = '53.56685606194195'
+latitude = '53.56685606194195' # To change, pull lat. and long. from Google Maps
 longitude = '-0.08339315195789283'
-
-# Define the base URL for the Met Office DataHub API
-base_url = 'https://data.hub.api.metoffice.gov.uk/sitespecific/v0'
-
-# Specify the endpoint for the type of weather data you need (e.g., hourly forecast)
-endpoint = '/point/hourly'
+base_url = 'https://data.hub.api.metoffice.gov.uk/sitespecific/v0' # Define the base URL for the Met Office DataHub API
+endpoint = '/point/hourly' # Specify the endpoint for the type of weather data you need (e.g., hourly forecast)
 
 # Build the full URL includeLocationName=TRUE means json response also contains the name of the weather station it is pulling data from. 
-# If recently changed, also call debug print full response to confirm identity of weather station
+# If recently changed, also print full response to confirm identity of weather station
 url = f"{base_url}{endpoint}?includeLocationName=TRUE&latitude={latitude}&longitude={longitude}"
 
 # Set up headers for the request
@@ -131,6 +126,10 @@ def get_weather():
 
         # Parse the JSON response
         data = response.json()
+        
+        # Debug print to inspect the full response structure - uncomment this if weather station location has changed.
+        #print("Raw Weather Data:")
+        #print(data)
 
         # Check if 'features' exist and contain the expected data
         if 'features' in data and len(data['features']) > 0:
