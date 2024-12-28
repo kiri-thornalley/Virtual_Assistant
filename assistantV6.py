@@ -8,11 +8,11 @@ from googleapiclient.discovery import build
 from todoist_api_python.api import TodoistAPI
 from datetime import datetime, timedelta, timezone
 from dateutil import parser # Import robust ISO 8601 parser
-from dateutil.parser import parse as dateutil_parse
+#from dateutil.parser import parse as dateutil_parse
 import pytz
 import re
 import requests
-import traceback
+#import traceback #uncomment me if error messages in this code are giving you close to nothing to go on to solve it. 
 
 # --- Setup ---
 # Logging
@@ -36,7 +36,7 @@ load_dotenv(dotenv_path="API_keys.env")
 
 #Refresh OAuth2 token if it has expired. 
 def refresh_token_if_needed():
-    """Checks if the token is expired and refreshes it if needed."""
+    """Checks if the token for Google services is expired and refreshes it if needed."""
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/calendar']
     creds = None
     # Token file is generated after initial authentication
@@ -61,6 +61,9 @@ def refresh_token_if_needed():
 
 # Authenticate Google API using OAuth2.0
 def authenticate_google_services():
+    """
+    Authenticates credentials for using Google services.
+    """
     # Define the required scopes for Sheets and Calendar
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/calendar']
 
@@ -96,7 +99,8 @@ api_key = os.getenv("API_KEY")
 if not api_key:
     raise ValueError("API key is not set. Please check your environment variables.")
 
-#Define location for where to call the API for, as latitude and longitude - currently set Grimsby, North East Lincolnshire. To change, pull lat and long. from Google Maps
+#Define location for where to call the API for, as latitude and longitude - currently set Grimsby, North East Lincolnshire. 
+# To change, pull lat. and long. from Google Maps
 latitude = '53.56685606194195'
 longitude = '-0.08339315195789283'
 
@@ -623,11 +627,16 @@ weights = {
 
 # Define max time for normalization
 max_time = 480  # In minutes - 8 hours
-maximum_energy = 3  # Energy level on a scale of 1 to 3
+maximum_energy = 3  # Energy level on a scale of 1 to 3, A slot can have at maximum "high/3" energy.
 
 # Function to calculate task score
 def calculate_task_score(task):
-    # Calculate the task score (as in your original function)
+    """
+    Calculates priority score for each task as a function of time needed, energy required, the tasks impact
+    and the proximity to its deadline.
+    """
+    
+    # Calculate the task score 
     time_needed = task.get("estimated_time", 60)  # Default to 60 mins if missing
     energy_required = {"low": 1, "medium": 2, "high": 3}.get(task.get("energy_level", "medium"), 0)
     impact = impact_mapping.get(task.get("impact", "low").lower(), 0)
@@ -640,7 +649,7 @@ def calculate_task_score(task):
         if isinstance(deadline, str):
             deadline = datetime.strptime(deadline, "%Y-%m-%d")
 
-        # Ensure both deadline and current time are timezone-aware or both naive
+        # Ensure both deadline and current time are timezone-aware
         if deadline.tzinfo is None:  # Naive deadline, make it aware
             deadline = pytz.utc.localize(deadline)
         if datetime.now().tzinfo is None:  # Naive current time, make it aware
@@ -648,7 +657,7 @@ def calculate_task_score(task):
         else:  # Use current time with timezone if it's already aware
             current_time = datetime.now()
 
-        # Calculate days difference between deadline and current time
+        # Calculate difference between deadline and current time (in days)
         deadline_days = (deadline - current_time).days
 
     # Normalize scores
@@ -656,8 +665,8 @@ def calculate_task_score(task):
     energy_score = (energy_required / maximum_energy) * weights["E"]
     impact_score = impact * weights["I"]
         # Calculate the deadline score
-    if deadline_days >= 0:
-        deadline_score = (1 / (deadline_days + 1)) * weights["D"]  # Task is not overdue
+    if deadline_days >= 0: # Task is not overdue
+        deadline_score = (1 / (deadline_days + 1)) * weights["D"]  
     else:
         deadline_score = 2  # Task is overdue, fixed value for high urgency
 
@@ -682,6 +691,10 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
 
     # Get the current time in UTC and make it offset-aware
     current_time = datetime.utcnow().replace(microsecond=0, tzinfo=pytz.utc)
+
+    # If task_deadline is None, assign it a far future date (e.g., 31st December 9999)
+    if task_deadline is None:
+        task_deadline = datetime(9999, 12, 31, 23, 59, 59, tzinfo=pytz.utc)
 
     # Gather occupied slots from calendar events and make them offset-aware
     occupied_slots = []
@@ -757,6 +770,7 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
     return available_timeslots
 
 def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline):
+
     suitable_timeslots = get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline)
     
     print("Suitable timeslots for the task:")
@@ -770,6 +784,14 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
     """
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
+
+    Args:
+        tasks (): 
+        available_timeslots ():
+        occupied_slots (): 
+    
+    Returns:
+        scheduled_tasks ():
     """
     scheduled_tasks = []
 
@@ -858,7 +880,7 @@ def merge_scheduled_tasks(scheduled_tasks):
         scheduled_tasks (list): List of scheduled tasks with their allocated times.
 
     Returns:
-        list: Optimized list of scheduled tasks with consecutive slots merged.
+        merged_tasks (list): Optimized list of scheduled tasks with consecutive slots merged.
     """
     if not scheduled_tasks:
         return []
@@ -894,7 +916,7 @@ def merge_overlapping_intervals(intervals):
     Args:
         intervals (list): List of tuples (start_time, end_time).
     Returns:
-        list: Merged intervals.
+        Merged intervals (list): .
     """
     if not intervals:
         return []
@@ -917,19 +939,19 @@ def merge_overlapping_intervals(intervals):
 
 # -- Colour settings for Google Calendar tasks
 #colour Name	ID
-#Lavender	1
-#Sage	2
-#Grape	3
-#Flamingo	4
-#Banana	5
-#Tangerine	6
-#Peacock	7
-#Graphite	8
-#Blueberry	9
-#Basil	10
-#Tomato	11
+#Lavender	    1
+#Sage	        2
+#Grape	        3
+#Flamingo	    4
+#Banana	        5
+#Tangerine	    6
+#Peacock	    7
+#Graphite	    8
+#Blueberry	    9
+#Basil	        10
+#Tomato	        11
 
-COLOuR_MAPPING = {
+COLOUR_MAPPING = {
 
     "emails": "3",  
     "admin": "9",  
@@ -940,7 +962,7 @@ COLOuR_MAPPING = {
     "giving_talks": "4",
 }
 
-def schedule_event(calendar_service, task_name, start_time, end_time, labels):
+def schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id):
     """
     Schedule an event in Google Calendar with a specific color based on task labels.
 
@@ -954,22 +976,16 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels):
     # Determine the colourId based on task labels
     task_colour = None
     for label in labels:
-        if label in COLOuR_MAPPING:
-            task_colour = COLOuR_MAPPING[label]
+        if label in COLOUR_MAPPING:
+            task_colour = COLOUR_MAPPING[label]
             break  # Use the first matching color
 
     # Build the event body
     event = {
         'summary': task_name,
-        'description': 'Scheduled by task scheduler',
-        'start': {
-            'dateTime': start_time.isoformat(),
-            'timeZone': 'UTC',
-        },
-        'end': {
-            'dateTime': end_time.isoformat(),
-            'timeZone': 'UTC',
-        },
+        'description': 'Scheduled by task scheduler \n Task ID: {task_id}',
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
         'colorId': task_colour,  # Set the event color
     }
 
@@ -979,36 +995,111 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels):
     except Exception as e:
         print(f"Failed to schedule task '{task_name}': {e}")
 
+def fetch_existing_events(calendar_service):
+    """
+    Fetch existing events from Google Calendar with task metadata.
+
+    Args:
+        calendar_service: Google Calendar service instance.
+
+    Returns:
+        dict: A mapping of task IDs to their events.
+    """
+    time_min = datetime.utcnow().isoformat() + 'Z'  # Fetch from current time onwards
+    events_result = calendar_service.events().list(
+        calendarId='primary',
+        timeMin=time_min,
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+
+    events = events_result.get('items', [])
+    existing_tasks = {}
+
+    for event in events:
+        description = event.get('description', '')
+        task_id = None
+        if 'Task ID:' in description:
+            # Extract Task ID from the description
+            task_id = description.split('Task ID:')[-1].strip()
+        if task_id:
+            existing_tasks[task_id] = event
+
+    return existing_tasks
+
+def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
+    """
+    Dynamically manage events in Google Calendar based on scheduled tasks.
+
+    Args:
+        calendar_service: Google Calendar service instance.
+        scheduled_tasks (list): List of scheduled tasks with time information.
+        parsed_tasks (list): Original parsed tasks with task IDs and labels.
+    """
+    existing_events = fetch_existing_events(calendar_service)
+
+    for task in scheduled_tasks:
+        task_name = task["task_name"]
+        start_time = task["start_time"]
+        end_time = task["end_time"]
+        task_id = next((t["id"] for t in parsed_tasks if t["name"] == task_name), None)
+        labels = next((t["labels"] for t in parsed_tasks if t["name"] == task_name), [])
+
+        # Check if the task already exists in Google Calendar
+        if task_id in existing_events:
+            existing_event = existing_events[task_id]
+            existing_start = parser.isoparse(existing_event['start']['dateTime'])
+            existing_end = parser.isoparse(existing_event['end']['dateTime'])
+
+            # Update only if the times have changed
+            if existing_start != start_time or existing_end != end_time:
+                print(f"Updating event for task '{task_name}'...")
+                calendar_service.events().update(
+                    calendarId='primary',
+                    eventId=existing_event['id'],
+                    body={
+                        'summary': task_name,
+                        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
+                        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
+                        'description': existing_event['description'],
+                        'colourId': next((COLOUR_MAPPING.get(label) for label in labels if label in COLOUR_MAPPING), None),
+                    }
+                ).execute()
+        else:
+            # Create a new event if it doesn't exist
+            schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id)
         
 if __name__ == "__main__":
     try:
         # Refresh token if needed
         creds = refresh_token_if_needed()
         if creds:
-            log_message("INFO", f"Token refreshed successfully.")
+            log_message("INFO", "Token refreshed successfully.")
         else:
             print("Authentication required!")
 
         # Authenticate services
         sheets_service, calendar_service = authenticate_google_services()
 
-        # Fetch weather data and determine if it's hot weather for adjustments in energy levels
+        # Fetch weather data and determine if adjustments to energy levels are required
         weather_data = get_weather()
         hot_weather = weather_analysis(weather_data)
 
-        # Fetch and parse tasks
+        # Fetch and parse tasks from Todoist
         parsed_tasks = parse_personal_and_work_tasks()
         if not parsed_tasks:
             raise ValueError("No tasks found. Ensure tasks are correctly labeled and accessible.")
 
         print(f"Parsed {len(parsed_tasks)} tasks.")
 
-        # Fetch working hours and energy levels
-        energy_profile = fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=hot_weather)
+        # Fetch working hours and energy levels from Google Sheets
+        energy_profile = fetch_working_hours_and_energy_levels(
+            sheets_service, weather_analysis=hot_weather
+        )
         if not energy_profile:
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
-        # Fetch calendar events
+        # Fetch calendar events from Google Calendar
         calendar_events = fetch_calendar_events(calendar_service)
         if not calendar_events:
             print("No upcoming events found.")
@@ -1019,7 +1110,7 @@ if __name__ == "__main__":
 
         # Print occupied slots from the calendar events with travel and rest times
         print("\nOccupied Slots (with Travel and Rest Time):")
-        occupied_slots = []  # List to hold the occupied slots with travel/rest times
+        occupied_slots = []  # List to hold occupied slots with travel/rest times
         for event in calendar_events:
             start_time, end_time = parse_event_datetime(event)
             if start_time and end_time:
@@ -1035,7 +1126,7 @@ if __name__ == "__main__":
         # Merge overlapping occupied slots
         occupied_slots = merge_overlapping_intervals(occupied_slots)
 
-        # Calculate task scores and sort by priority
+        # Calculate task scores and sort tasks by priority
         scored_tasks = [(task, calculate_task_score(task)) for task in parsed_tasks]
         scored_tasks = sorted(scored_tasks, key=lambda x: x[1], reverse=True)
         print("\nPrioritized Tasks:")
@@ -1049,33 +1140,54 @@ if __name__ == "__main__":
             task_energy_level = task["energy_level"]
             task_deadline = task["deadline"]
 
-            timeslots = get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline)
+            timeslots = get_available_timeslots(
+                energy_profile,
+                calendar_events,
+                task_type,
+                task_energy_level,
+                task_deadline,
+            )
             available_timeslots[task['name']] = timeslots
 
         # Schedule tasks using the greedy algorithm
-        log_message("INFO", f"Scheduling Tasks")
-        scheduled_tasks = schedule_tasks([task for task, _ in scored_tasks], available_timeslots, occupied_slots)
+        log_message("INFO", "Scheduling Tasks")
+        scheduled_tasks = schedule_tasks(
+            [task for task, _ in scored_tasks], available_timeslots, occupied_slots
+        )
 
-        # Merge consecutive scheduled tasks
+        # Merge consecutive scheduled tasks into larger slots
         merged_scheduled_tasks = merge_scheduled_tasks(scheduled_tasks)
 
         # Display the merged scheduled tasks
         print("\nScheduled Tasks:")
         for task in merged_scheduled_tasks:
-            log_message("INFO", f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}")
+            log_message(
+                "INFO",
+                f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}",
+            )
 
         # Add merged scheduled tasks to Google Calendar
         for scheduled_task in merged_scheduled_tasks:
             task_name = scheduled_task["task_name"]
             start_time = scheduled_task["start_time"]
             end_time = scheduled_task["end_time"]
-            
-            # Fetch task labels for determining the color
-            labels = next(
-                (task["labels"] for task in parsed_tasks if task["name"] == task_name),
-                []
+
+            # Fetch task details including labels and ID
+            matching_task = next(
+                (task for task in parsed_tasks if task["name"] == task_name),
+                None
             )
-            schedule_event(calendar_service, task_name, start_time, end_time, labels)
+
+            # Extract labels and task ID if available
+            if matching_task:
+                labels = matching_task["labels"]
+                task_id = matching_task["id"]  # Pass Task ID
+            else:
+                labels = []
+                task_id = None  # Fallback if no match is found
+
+            # Schedule the task in Google Calendar with metadata
+            schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id)
 
         print("\nScheduling Complete.")
         
