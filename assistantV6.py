@@ -8,7 +8,6 @@ from googleapiclient.discovery import build
 from todoist_api_python.api import TodoistAPI
 from datetime import datetime, timedelta, timezone
 from dateutil import parser # Import robust ISO 8601 parser
-#from dateutil.parser import parse as dateutil_parse
 import pytz
 import re
 import requests
@@ -23,6 +22,7 @@ logging.basicConfig(
 )
 
 def log_message(level, message):
+    """Set up of logging functionality - logging messages are captured in task_scheduler.log"""
     if level == "INFO":
         logging.info(message)
     elif level == "ERROR":
@@ -34,9 +34,13 @@ def log_message(level, message):
 # Load API keys - .env added to gitignore so these will not accidentally be uploaded to GitHub. 
 load_dotenv(dotenv_path="API_keys.env")
 
-#Refresh OAuth2 token if it has expired. 
 def refresh_token_if_needed():
-    """Checks if the token for Google services is expired and refreshes it if needed."""
+    """ Checks if the token for Google services is expired and refreshes it if needed.
+    Parameter(s):
+        none
+    Returns:
+        creds: credentials for Google services as token.json
+    """
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/calendar']
     creds = None
     # Token file is generated after initial authentication
@@ -61,8 +65,12 @@ def refresh_token_if_needed():
 
 # Authenticate Google API using OAuth2.0
 def authenticate_google_services():
-    """
-    Authenticates credentials for using Google services.
+    """ Authenticates credentials for using Google services.
+    Parameter(s):
+        none
+    Returns:
+        sheets_service:  Google Sheets service instance
+        calendar_service: Google Calendar service instance
     """
     # Define the required scopes for Sheets and Calendar
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/calendar']
@@ -93,7 +101,7 @@ def authenticate_google_services():
     
     return sheets_service, calendar_service
 
-# -- Get weather from Met Office DataHub API
+# -- Get weather from Met Office DataHub API ---
 # Pull api_key from .env file
 api_key = os.getenv("API_KEY")
 if not api_key:
@@ -106,7 +114,7 @@ base_url = 'https://data.hub.api.metoffice.gov.uk/sitespecific/v0' # Define the 
 endpoint = '/point/hourly' # Specify the endpoint for the type of weather data you need (e.g., hourly forecast)
 
 # Build the full URL includeLocationName=TRUE means json response also contains the name of the weather station it is pulling data from. 
-# If recently changed, also print full response to confirm identity of weather station
+# If recently changed, also print full response in def get_weather to confirm identity of weather station
 url = f"{base_url}{endpoint}?includeLocationName=TRUE&latitude={latitude}&longitude={longitude}"
 
 # Set up headers for the request
@@ -116,8 +124,13 @@ headers = {
     'User-Agent': 'Python/requests'
 }
 
-#Pull next 48 hours weather data from Met Office, keep time and "feelsLikeTemperature"
 def get_weather(): 
+    """Retrieves the next 48 hours of data for the chosen weather station as JSON, keeps only time and feels-like temperature.
+    Parameter(s):
+        none
+    Returns:
+        weather_data (list): A list which contains time and feels like temperature.
+    """
     # List to store weather data
     weather_data = []
     try:
@@ -155,6 +168,13 @@ def get_weather():
 
 #search weather_data to confirm temperature is/isn't >22c in the next 48 hours.
 def weather_analysis(weather_data, threshold_temp=22):
+    """ Analyses the data recieved from the Met Office DataHub. 
+    Parameter(s):
+        weather_data (list): hourly weather data for chosen weather station - output of get_weather function
+        threshold_temp (int): threshold temperature beyond which it is considered 'hot weather'
+    Returns: 
+        hot weather (bool): returns true if any entry has a feels-like temperature above the threshold 
+    """
     for entry in weather_data:
         if isinstance(entry['feelsLikeTemperature'], (int, float)):
             if entry['feelsLikeTemperature'] > threshold_temp:
@@ -785,13 +805,13 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
 
-    Args:
+    Parameter(s):
         tasks (): 
-        available_timeslots ():
+        available_timeslots (dict):
         occupied_slots (): 
     
     Returns:
-        scheduled_tasks ():
+        scheduled_tasks (list):
     """
     scheduled_tasks = []
 
@@ -876,7 +896,7 @@ def merge_scheduled_tasks(scheduled_tasks):
     """
     Merges consecutive scheduled tasks into larger slots if they belong to the same task and day.
 
-    Args:
+    Parameter(s):
         scheduled_tasks (list): List of scheduled tasks with their allocated times.
 
     Returns:
@@ -913,7 +933,7 @@ def merge_scheduled_tasks(scheduled_tasks):
 def merge_overlapping_intervals(intervals):
     """
     Merge overlapping or adjacent intervals in a list of time ranges.
-    Args:
+    Parameter(s):
         intervals (list): List of tuples (start_time, end_time).
     Returns:
         Merged intervals (list): .
@@ -937,7 +957,7 @@ def merge_overlapping_intervals(intervals):
 
     return merged_intervals
 
-# -- Colour settings for Google Calendar tasks
+# -- Colour settings for Google Calendar tasks -- 
 #colour Name	ID
 #Lavender	    1
 #Sage	        2
@@ -966,7 +986,7 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
     """
     Schedule an event in Google Calendar with a specific colour based on task labels.
 
-    Args:
+    Parameter(s):
         calendar_service: Google Calendar service instance.
         task_name (str): Task name.
         start_time (datetime): Start time of the event.
@@ -999,7 +1019,7 @@ def fetch_existing_events(calendar_service):
     """
     Fetch existing events from Google Calendar with task metadata.
 
-    Args:
+    Parameter(s):
         calendar_service: Google Calendar service instance.
 
     Returns:
