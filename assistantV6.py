@@ -175,6 +175,7 @@ if not api_key:
 api = TodoistAPI(api_key)
 
 def parse_personal_and_work_tasks():
+    """ Pulls tasks from Todoist. Helper functions parse estimated task duration ... """
     try:
         # Fetch all tasks
         tasks = api.get_tasks()
@@ -950,7 +951,7 @@ def merge_overlapping_intervals(intervals):
 #Basil	        10
 #Tomato	        11
 
-COLOUR_MAPPING = {
+colour_mapping = {
 
     "emails": "3",  
     "admin": "9",  
@@ -963,7 +964,7 @@ COLOUR_MAPPING = {
 
 def schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id):
     """
-    Schedule an event in Google Calendar with a specific color based on task labels.
+    Schedule an event in Google Calendar with a specific colour based on task labels.
 
     Args:
         calendar_service: Google Calendar service instance.
@@ -975,17 +976,17 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
     # Determine the colourId based on task labels
     task_colour = None
     for label in labels:
-        if label in COLOUR_MAPPING:
-            task_colour = COLOUR_MAPPING[label]
+        if label in colour_mapping:
+            task_colour = colour_mapping[label]
             break  # Use the first matching color
 
     # Build the event body
     event = {
         'summary': task_name,
-        'description': 'Scheduled by task scheduler \n Task ID: {task_id}',
+        'description': f'Scheduled by task scheduler \n Task ID: {task_id}',
         'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
         'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
-        'colorId': task_colour,  # Set the event color
+        'colorId': task_colour,  # Set the event colour
     }
 
     try:
@@ -1018,9 +1019,11 @@ def fetch_existing_events(calendar_service):
     for event in events:
         description = event.get('description', '')
         task_id = None
+
         if 'Task ID:' in description:
-            # Extract Task ID from the description
+            # Extract Task ID
             task_id = description.split('Task ID:')[-1].strip()
+
         if task_id:
             existing_tasks[task_id] = event
 
@@ -1029,43 +1032,54 @@ def fetch_existing_events(calendar_service):
 def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
     """
     Dynamically manage events in Google Calendar based on scheduled tasks.
-
-    Args:
-        calendar_service: Google Calendar service instance.
-        scheduled_tasks (list): List of scheduled tasks with time information.
-        parsed_tasks (list): Original parsed tasks with task IDs and labels.
     """
+    # Fetch existing events from Google Calendar
+    print("Fetching existing events...")
     existing_events = fetch_existing_events(calendar_service)
 
     for task in scheduled_tasks:
         task_name = task["task_name"]
         start_time = task["start_time"]
         end_time = task["end_time"]
-        task_id = next((t["id"] for t in parsed_tasks if t["name"] == task_name), None)
-        labels = next((t["labels"] for t in parsed_tasks if t["name"] == task_name), [])
 
-        # Check if the task already exists in Google Calendar
+        # Match Todoist task using task ID
+        matching_task = next(
+            (t for t in parsed_tasks if t["name"] == task_name), None
+        )
+        if not matching_task:
+            continue  # Skip tasks without matching details
+
+        task_id = matching_task["id"]
+        labels = matching_task["labels"]
+
+        # Check if the task already exists in the calendar
         if task_id in existing_events:
+            # Existing event found—check if times have changed
             existing_event = existing_events[task_id]
             existing_start = parser.isoparse(existing_event['start']['dateTime'])
             existing_end = parser.isoparse(existing_event['end']['dateTime'])
 
-            # Update only if the times have changed
+            # Update event only if start or end times differ
             if existing_start != start_time or existing_end != end_time:
                 print(f"Updating event for task '{task_name}'...")
+
+                # Prepare updated event data
+                updated_event = {
+                    'summary': task_name,
+                    'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
+                    'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
+                    'description': existing_event['description'],  # Keep original description
+                    'colorId': next((colour_mapping.get(label) for label in labels if label in colour_mapping), None),
+                }
+
+                # Push the update to Google Calendar
                 calendar_service.events().update(
                     calendarId='primary',
                     eventId=existing_event['id'],
-                    body={
-                        'summary': task_name,
-                        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
-                        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
-                        'description': existing_event['description'],
-                        'colourId': next((COLOUR_MAPPING.get(label) for label in labels if label in COLOUR_MAPPING), None),
-                    }
+                    body=updated_event
                 ).execute()
         else:
-            # Create a new event if it doesn't exist
+            # No existing event — create a new one
             schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id)
         
 if __name__ == "__main__":
@@ -1186,7 +1200,7 @@ if __name__ == "__main__":
                 task_id = None  # Fallback if no match is found
 
             # Schedule the task in Google Calendar with metadata
-            schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id)
+            manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
 
         print("\nScheduling Complete.")
         
