@@ -50,7 +50,7 @@ These features are likely to appear in a later version:
 
 ## Installation
 
-To set up this virtual assistant, ensure you have Python installed (Python 3.7 or later). Clone this repository and install the required packages:
+To set up this virtual assistant, ensure you have Python installed (Python 3.10 or later). Clone this repository and install the required packages:
 
 git clone https://github.com/kiri-thornalley/virtual-assistant.git
 cd virtual-assistant
