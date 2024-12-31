@@ -195,16 +195,24 @@ if not api_key:
 api = TodoistAPI(api_key)
 
 def parse_personal_and_work_tasks():
-    """ Pulls tasks from Todoist. Helper functions parse estimated task duration ... """
+    """ Pulls tasks from Todoist. Helper functions parse estimated task duration and task due date, map labels to task attributes.
+    Parameters:
+        none
+    Returns:
+        parsed_tasks (list): A list of work/personal tasks parsed from Todoist 
+    """
     try:
         # Fetch all tasks
         tasks = api.get_tasks()
         parsed_tasks = []
 
         def extract_estimated_time(description, default_time=60):
-            """
-            Extracts estimated time from task description or notes.
-            Matches both compact (e.g., '1h', '30m') and natural language (e.g., '1 hour').
+            """ Extracts estimated time from task description or notes. Matches both compact (e.g., '1h', '30m') and natural language (e.g., '1 hour').
+            Parameter(s):
+                description (string): Task description, from Todoist 
+                default time (int): Default task duration (60 mins) if no task duration is found
+            Returns:
+                estimated_time (int): Task duration as parsed from task description in Todoist 
             """
             # Match compact time formats like '1h', '30m'
             match = re.search(r"(\d+)\s*([hm])", description.lower())
