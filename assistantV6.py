@@ -199,7 +199,7 @@ def parse_personal_and_work_tasks():
     Parameters:
         none
     Returns:
-        parsed_tasks (list): A list of work/personal tasks parsed from Todoist 
+        parsed_tasks (list): a list of work/personal tasks parsed from Todoist 
     """
     try:
         # Fetch all tasks
@@ -209,10 +209,10 @@ def parse_personal_and_work_tasks():
         def extract_estimated_time(description, default_time=60):
             """ Extracts estimated time from task description or notes. Matches both compact (e.g., '1h', '30m') and natural language (e.g., '1 hour').
             Parameter(s):
-                description (string): Task description, from Todoist 
-                default time (int): Default task duration (60 mins) if no task duration is found
+                description (string): task description, from Todoist 
+                default time (int): default task duration (60 mins) if no task duration is found
             Returns:
-                estimated_time (int): Task duration as parsed from task description in Todoist 
+                estimated_time (int): task duration (in mins) as parsed from task description in Todoist 
             """
             # Match compact time formats like '1h', '30m'
             match = re.search(r"(\d+)\s*([hm])", description.lower())
@@ -237,6 +237,13 @@ def parse_personal_and_work_tasks():
         def map_labels_to_attributes(labels):
             """
             Maps task labels to energy level, impact, classification, and type.
+            Parameter(s):
+                labels: from labels assigned in Todoist
+            Returns:
+                energy_level (literal): ['high', 'medium', 'low']
+                impact (literal): ['very high', 'high', 'medium', 'low']
+                classification (literal): ['email', 'admin', 'writing', 'data analysis', 'reading & searching', 'thinking & planning', 'preparing & giving talks']
+                task_type (literal): ['Work', 'Personal']
             """
             energy_level = None
             impact = None
@@ -285,6 +292,11 @@ def parse_personal_and_work_tasks():
             """
             Parses the due date or datetime for a task. Handles both full dates (whole-day tasks) and datetime objects.
             Ensures all datetimes are timezone-aware.
+            Parameter(s):
+                task_due:
+            Returns:
+                deadline (datetime): returns deadline if task has both a due date and time
+                task_end_of_day (datetime): returns task_end_of_day if task only has a due date, and no set time. 23:59:59 is then assigned automatically
             """
             if not task_due:
                 return None  # Handle missing due field gracefully
@@ -378,7 +390,13 @@ def parse_personal_and_work_tasks():
 #Fetch working hours and energy levels.
 def fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=False):
     """
-    Fetches and generates an energy profile for the next 28 days.
+    Fetches working hours and energy levels from Google Sheets. Helper functions converts 1-10 into low, medium, high and generates an energy profile 
+    for the next 28 days to allow future scheduling of tasks. 
+    Parameter(s):
+        sheets_service: Google Sheets service instance
+        weather_analysis (bool): Default is false. True if hot weather has been detected.
+    Returns:
+        energy_profile (dict): Uses date as the key, holds timeslot start and end, and it's associated energy value as string.
     """
     standard_sheet_id = "1ILvTyuMjPQ0NiC1dqF_zi14CxKBvhiSUu0yhO0SEQyk"
     hot_weather_sheet_id = "1YZfDpX3bBYqDqwZdEq6O7yrK34PcTLgiX7p3d2mDCW0"
@@ -457,8 +475,16 @@ def fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=False
         return {}
     
 ## -- Pulling meetings from Google Calendar, adding travel events/ screen-free time
-# Fetch events from Google Calendar - will not pull programmatically created tasks
 def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
+    """ Fetch events from Google Calendar - will not pull programmatically created tasks.
+    Parameters:
+        calendar_service: Google Calendar service instance
+        time_min (datetime): start of time range to pull events
+        time_max (datetime): end of time range to search for events - 28 days
+    
+    Returns:
+        events (list): a list of immovable events (e.g., meetings) that occupy specific timeslots
+    """
     if not time_min:
         time_min = datetime.utcnow().isoformat() + 'Z'
     if not time_max:
@@ -514,7 +540,13 @@ def ensure_datetime(value):
         raise TypeError(f"Expected datetime object or string, got {type(value).__name__}")
     
 def parse_event_datetime(event):
-    """Parse start and end times from a calendar event and ensure they are datetime objects."""
+    """Parse start and end times from a calendar event and ensure they are datetime objects.
+    Parameter(s):
+        event(dict): a single entry in list of events (e.g., meetings) that occupy specific timeslots
+    Returns:
+        start_time (datetime): event start time
+        end_time (datetime): event end time
+    """
     try:
         start_time = event['start'].get('dateTime') or event['start'].get('date')
         end_time = event['end'].get('dateTime') or event['end'].get('date')
@@ -525,6 +557,17 @@ def parse_event_datetime(event):
         
 # Adds travel events before and after a meeting if it has a location
 def add_travel_event(calendar_service, task_name, travel_start, travel_end, location):
+    """
+    If a meeting has a location, then add travel time as separate events before/after the meeting
+    Parameter(s):
+        calendar_service: Google Calendar service instance
+        task_name (str): task name
+        travel_start (datetime): start time of travel
+        travel_end (datetime): end time of travel event
+        location (str): event location
+    Returns:
+        new event: Travel events are created in Google Calendar
+    """
     try:
         # Add travel before the meeting
         event_before = {
@@ -560,8 +603,13 @@ def add_travel_event(calendar_service, task_name, travel_start, travel_end, loca
     except Exception as e:
         print(f"Failed to add travel events for task {task_name}: {e}")
 
-# Is this a virtual meeting depending on description or location, with case insensitive matching
 def is_virtual_meeting(event):
+    """ Parses event description and location to determine if this is a virtual meeting, with case insensitive matching for keywords
+    Parameter(s):
+        event(dict): a single entry in list of events (e.g., meetings) that occupy specific timeslots
+    Returns:
+        is_virtual_meeting (bool): returns true if one of a set of keywords is found in event description/location 
+    """
     virtual_keywords = ['zoom', 'google meet', 'teams', 'skype', 'webex', 'attendanywhere']
     description = event.get('description', '').lower()
     
@@ -577,8 +625,14 @@ def is_virtual_meeting(event):
     # If neither description nor location indicates a virtual meeting, return False
     return False
 
-# Add a 15-minute rest period after a virtual meeting as a separate Google Calendar event.
 def add_rest_period(calendar_service, end_time):
+    """ Adds a 15-minute screen-free period following a virtual meeting. Screen-free time added as a separate calendar event.
+    Parameter(s):
+        calendar_service: Google Calendar instance
+        end_time (datetime): event end time (start time of screen-free time)
+    Returns:
+        new event: Travel events are created in Google Calendar
+    """
     rest_start_time = end_time
     rest_end_time = rest_start_time + timedelta(minutes=15)
 
@@ -600,21 +654,26 @@ def add_rest_period(calendar_service, end_time):
         },
     }
 
-    #try:
-        # Insert the event into the Google Calendar
-        #event_result = calendar_service.events().insert(
-            #calendarId='primary',  # Insert into the primary calendar
-           #body=event
-        #).execute()
+    try:
+        #Insert the event into the Google Calendar
+        event_result = calendar_service.events().insert(calendarId='primary',body=event).execute()
 
-        # Log that the event was created successfully
-        #log_message("INFO", f"Rest period added to Google Calendar: {event_result['summary']} from {rest_start_time_str} to {rest_end_time_str}")
-    #except Exception as e:
-        #log_message("ERROR", f"Failed to add rest period to Google Calendar: {e}")
+        #Log that the event was created successfully
+        log_message("INFO", f"Rest period added to Google Calendar: {event_result['summary']} from {rest_start_time_str} to {rest_end_time_str}")
+    except Exception as e:
+        log_message("ERROR", f"Failed to add rest period to Google Calendar: {e}")
 
 # Handle meeting with location and add travel time and rest period if virtual
 def handle_meeting_with_location(calendar_service, event, location=None, travel_time=None):
-    """Add travel time and rest period after meeting if virtual."""
+    """ Add travel time and rest period after meeting if virtual.
+    Parameter(s):
+        calendar_service: Google Calendar service instance
+        event(dict): a single entry in list of events (e.g., meetings) that occupy specific timeslots
+        location (str): event location
+        travel time (int): length of travel to/from event. Default 30 mins
+    Returns:
+        new event: creates travel time (in person) or screen-free time (if virtual)
+    """
     # Handle both 'dateTime' and 'date' keys
     start_time_str = event['start'].get('dateTime', event['start'].get('date'))
     end_time_str = event['end'].get('dateTime', event['end'].get('date'))
@@ -662,6 +721,10 @@ def calculate_task_score(task):
     """
     Calculates priority score for each task as a function of time needed, energy required, the tasks impact
     and the proximity to its deadline.
+    Parameter(s):
+        task(dict): task from Todoist 
+    Returns:
+        score (int): Task score.
     """
     
     # Calculate the task score 
@@ -712,6 +775,13 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
     Determines available timeslots by comparing energy profile and occupied slots from the calendar,
     and filters them based on the task's energy level, deadline, and current time.
     Handles partially available slots and updates the available slots accordingly.
+    Parameter(s):
+        energy_profile (dict): Uses date as the key, holds timeslot start and end, and it's associated energy value as string.
+        calendar_events(list): a list of immovable events (e.g., meetings) that occupy specific timeslots
+        task_type(literal): [work, personal]
+        task_energy_level (literal): [low, medium, high]
+        task_deadline (datetime): If deadline == none, then 31st-Dec-9999 is assigned within this function
+
     """
     # Ensure the task deadline is offset-aware (e.g., UTC)
     if task_deadline and task_deadline.tzinfo is None:
@@ -798,7 +868,14 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
     return available_timeslots
 
 def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline):
-
+    """ Prints all possible suitable timeslots for a given task that exist between now and task deadline. Mostly used for debugging purposes.
+    Parameter(s):
+    energy_profile (dict): data from Google Sheets, then extended to the next 28 days through fetch_working_hours_and_energy_levels
+    calendar_events: a list of immovable events (e.g., meetings) that occupy specific timeslots
+    task_type (literal): ['Work', 'Personal']
+    task_energy_level (literal): [low, medium, high]
+    task_deadline (datetime): task deadline (from Todoist). If no time set, 23:59:59 is assigned through  
+    """
     suitable_timeslots = get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline)
     
     print("Suitable timeslots for the task:")
@@ -814,12 +891,12 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
     without overlap with occupied slots.
 
     Parameter(s):
-        tasks (): 
-        available_timeslots (dict):
-        occupied_slots (): 
+        tasks (list): list of tasks from todoist 
+        available_timeslots (dict): dictionary of unoccupied slots of equal or greater energy level and correct type [work, personal].
+        occupied_slots (list): list of occupied slots from Google Calendar (e.g., meetings and other immovable tasks) 
     
     Returns:
-        scheduled_tasks (list):
+        scheduled_tasks (list):list of tasks that have been scheduled with their
     """
     scheduled_tasks = []
 
@@ -903,12 +980,10 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
 def merge_scheduled_tasks(scheduled_tasks):
     """
     Merges consecutive scheduled tasks into larger slots if they belong to the same task and day.
-
     Parameter(s):
-        scheduled_tasks (list): List of scheduled tasks with their allocated times.
-
+        scheduled_tasks (list): list of scheduled tasks with their date, start and end times.
     Returns:
-        merged_tasks (list): Optimized list of scheduled tasks with consecutive slots merged.
+        merged_tasks (list): optimized list of scheduled tasks with consecutive slots merged.
     """
     if not scheduled_tasks:
         return []
@@ -942,9 +1017,9 @@ def merge_overlapping_intervals(intervals):
     """
     Merge overlapping or adjacent intervals in a list of time ranges.
     Parameter(s):
-        intervals (list): List of tuples (start_time, end_time).
+        intervals (list): list of tuples (start_time, end_time).
     Returns:
-        Merged intervals (list): .
+        Merged intervals (list): list of tuples (start_time, end_time).
     """
     if not intervals:
         return []
@@ -996,10 +1071,12 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
 
     Parameter(s):
         calendar_service: Google Calendar service instance.
-        task_name (str): Task name.
-        start_time (datetime): Start time of the event.
-        end_time (datetime): End time of the event.
-        labels (list): List of labels associated with the task.
+        task_name (str): task name.
+        start_time (datetime): etart time of the event.
+        end_time (datetime): end time of the event.
+        labels (list): list of labels associated with the task.
+    Returns:
+        new event: creates new event in Google Calendar
     """
     # Determine the colourId based on task labels
     task_colour = None
@@ -1026,12 +1103,10 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
 def fetch_existing_events(calendar_service):
     """
     Fetch existing events from Google Calendar with task metadata.
-
     Parameter(s):
         calendar_service: Google Calendar service instance.
-
     Returns:
-        dict: A mapping of task IDs to their events.
+        existing_tasks (dict): a dictionary mapping task IDs to their events.
     """
     time_min = datetime.utcnow().isoformat() + 'Z'  # Fetch from current time onwards
     events_result = calendar_service.events().list(
@@ -1060,6 +1135,10 @@ def fetch_existing_events(calendar_service):
 def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
     """
     Dynamically manage events in Google Calendar based on scheduled tasks.
+    Parameter(s):
+        calendar service: Google Calendar service instance.
+        scheduled_tasks (list): list of scheduled tasks with their date, start and end times.
+        parsed_tasks (list): list of work/personal tasks parsed from Todoist 
     """
     # Fetch existing events from Google Calendar
     print("Fetching existing events...")
@@ -1134,9 +1213,7 @@ if __name__ == "__main__":
         print(f"Parsed {len(parsed_tasks)} tasks.")
 
         # Fetch working hours and energy levels from Google Sheets
-        energy_profile = fetch_working_hours_and_energy_levels(
-            sheets_service, weather_analysis=hot_weather
-        )
+        energy_profile = fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=hot_weather)
         if not energy_profile:
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
@@ -1149,9 +1226,9 @@ if __name__ == "__main__":
                 location = event.get('location', None)
                 handle_meeting_with_location(calendar_service, event, location)
 
-        # Print occupied slots from the calendar events with travel and rest times
-        print("\nOccupied Slots (with Travel and Rest Time):")
-        occupied_slots = []  # List to hold occupied slots with travel/rest times
+        # Print occupied slots from calendar events 
+        print("\nOccupied Slots:")
+        occupied_slots = []  # List to hold occupied slots and automatically generated travel/ rest time
         for event in calendar_events:
             start_time, end_time = parse_event_datetime(event)
             if start_time and end_time:
