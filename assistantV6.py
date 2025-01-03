@@ -31,6 +31,9 @@ def log_message(level, message):
         logging.warning(message)
     print(message)  # Immediate feedback
 
+# Set timezone dynamically
+local_tz = timezone('Europe/London') #Automatically handles transitions between GMT/BST 
+
 # Load API keys - .env added to gitignore so these will not accidentally be uploaded to GitHub. 
 load_dotenv(dotenv_path="API_keys.env")
 
@@ -298,32 +301,32 @@ def parse_personal_and_work_tasks():
                 deadline (datetime): returns deadline if task has both a due date and time
                 task_end_of_day (datetime): returns task_end_of_day if task only has a due date, and no set time. 23:59:59 is then assigned automatically
             """
+            local_tz = pytz.timezone('Europe/London')
+
             if not task_due:
                 return None  # Handle missing due field gracefully
 
-            # If the task has a datetime (timezone-aware or naive)
+            # Task with datetime
             if hasattr(task_due, 'datetime') and task_due.datetime:
-                # Parse datetime and make it timezone-aware if it's naive
-                deadline = parse_datetime(task_due.datetime)
+                deadline = parse_datetime(task_due.datetime)  # Call fixed parse_datetime
                 return deadline
 
-            # If the task has only a date (whole-day task)
+            # Task with date only
             if hasattr(task_due, 'date') and task_due.date:
-                # If the date is a string, convert it to a datetime object
                 if isinstance(task_due.date, str):
-                    task_date = datetime.strptime(task_due.date, '%Y-%m-%d')  # Adjust format if necessary
+                    task_date = datetime.strptime(task_due.date, '%Y-%m-%d')  # Convert to datetime
                 else:
                     task_date = task_due.date
 
-                # Make sure the datetime is timezone-aware
+                # Localize date to Europe/London
                 if task_date.tzinfo is None:
-                    task_date = pytz.utc.localize(task_date)  # Localize to UTC if it's naive
+                    task_date = local_tz.localize(task_date)
 
-                # Set the deadline to 23:59:59 on the due date
+                # Assign 23:59:59 as the end of the day
                 task_end_of_day = task_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                 return task_end_of_day
 
-            return None  # Return None if neither field is available
+            return None
 
         def parse_datetime(date_string):
             """
@@ -333,9 +336,11 @@ def parse_personal_and_work_tasks():
             try:
                 # Try parsing as a datetime with timezone info
                 dt = datetime.fromisoformat(date_string)
-                if dt.tzinfo is None:
-                    # If the datetime is naive, make it UTC by default
-                    dt = pytz.utc.localize(dt)
+                local_tz = pytz.timezone('Europe/London')
+                if dt.tzinfo is None:  # Localize naive datetime
+                    dt = local_tz.localize(dt)
+                else:  # Convert aware datetime to local timezone
+                    dt = dt.astimezone(local_tz)
                 return dt
             except ValueError:
                 print(f"Error parsing datetime: {date_string}")
@@ -456,8 +461,8 @@ def fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=False
 
                 for current_date in matching_dates:
                     try:
-                        start_time = datetime.strptime(f"{current_date.strftime('%Y-%m-%d')} {start_time_str}", "%Y-%m-%d %H:%M")
-                        end_time = datetime.strptime(f"{current_date.strftime('%Y-%m-%d')} {end_time_str}", "%Y-%m-%d %H:%M")
+                        start_time = local_tz.localize(datetime.strptime(f"{current_date.strftime('%Y-%m-%d')} {start_time_str}", "%Y-%m-%d %H:%M"))
+                        end_time = local_tz.localize(datetime.strptime(f"{current_date.strftime('%Y-%m-%d')} {end_time_str}", "%Y-%m-%d %H:%M"))
                     except ValueError as e:
                         print(f"Skipping row due to invalid time format: {time_range} ({e})")
                         continue
@@ -485,10 +490,12 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
     Returns:
         events (list): a list of immovable events (e.g., meetings) that occupy specific timeslots
     """
+    local_tz = pytz.timezone('Europe/London')
+     # Default time_min and time_max in local timezone
     if not time_min:
-        time_min = datetime.utcnow().isoformat() + 'Z'
+        time_min = datetime.now(pytz.utc).astimezone(local_tz).isoformat()
     if not time_max:
-        time_max = (datetime.utcnow() + timedelta(days=28)).isoformat() + 'Z'
+        time_max = (datetime.now(pytz.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
 
     # Paginate through all events
     events = []
@@ -503,16 +510,13 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             pageToken=page_token
         ).execute()
 
-        # Extend the events list with the current page
-        page_events = events_result.get('items', [])
-        # Filter out programmatic events by default
+        # Filter out programmatically created events
         page_events = [
-            event for event in page_events
-            if 'Programmatic: true' not in event.get('description', '')
+            event for event in events_result.get('items', [])
+            if 'Scheduled by task scheduler ' not in event.get('description', '')
         ]
         events.extend(page_events)
 
-        # Handle pagination
         page_token = events_result.get('nextPageToken')
         if not page_token:
             break
@@ -520,21 +524,26 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
     return events
 
 def ensure_datetime(value):
-    """Ensure a value is a datetime object and make it offset-aware."""
+    """Ensure a value is a datetime object and make it timezone-aware with GMT/BST handling."""
+    local_tz = pytz.timezone('Europe/London')
+
     if isinstance(value, str):
         try:
-            # Parse ISO 8601 strings with dateutil.parser
             dt = parser.isoparse(value)
-            # Ensure the datetime is offset-aware
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)  # Assume UTC for naive datetimes
+            # Ensure datetime is aware and convert to local timezone
+            if dt.tzinfo is None:  # Naive datetime
+                dt = local_tz.localize(dt)  # Localize to Europe/London
+            else:
+                dt = dt.astimezone(local_tz)  # Convert to local timezone
             return dt
         except ValueError:
             raise ValueError(f"Invalid datetime string: {value}")
     elif isinstance(value, datetime):
-        # Make sure datetime is offset-aware
+        # Handle timezone-awareness for datetime objects
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)  # Assume UTC for naive datetimes
+            value = local_tz.localize(value)
+        else:
+            value = value.astimezone(local_tz)
         return value
     else:
         raise TypeError(f"Expected datetime object or string, got {type(value).__name__}")
@@ -575,11 +584,11 @@ def add_travel_event(calendar_service, task_name, travel_start, travel_end, loca
             'description': f'Travel time to {location}',
             'start': {
                 'dateTime': travel_start.isoformat(),
-                'timeZone': 'UTC',
+                'timeZone': 'Europe/London',
             },
             'end': {
                 'dateTime': travel_end.isoformat(),
-                'timeZone': 'UTC',
+                'timeZone': 'Europe/London',
             },
         }
         calendar_service.events().insert(calendarId='primary', body=event_before).execute()
@@ -589,12 +598,12 @@ def add_travel_event(calendar_service, task_name, travel_start, travel_end, loca
             'summary': f'Travel from {task_name}',
             'description': f'Travel time from {location}',
             'start': {
-                'dateTime': travel_end.isoformat(),
-                'timeZone': 'UTC',
+                'dateTime': end_time.isoformat(),
+                'timeZone': 'Europe/London',
             },
             'end': {
-                'dateTime': (travel_end + timedelta(minutes=30)).isoformat(),
-                'timeZone': 'UTC',
+                'dateTime': (end_time + timedelta(minutes=30)).isoformat(),
+                'timeZone': 'Europe/London',
             },
         }
         calendar_service.events().insert(calendarId='primary', body=event_after).execute()
@@ -633,6 +642,12 @@ def add_rest_period(calendar_service, end_time):
     Returns:
         new event: Travel events are created in Google Calendar
     """
+    local_tz = pytz.timezone('Europe/London')
+    if end_time.tzinfo is None:  # If it's naive, localize it
+        end_time = local_tz.localize(end_time)
+    else:  # Convert timezone-aware times to Europe/London
+        end_time = end_time.astimezone(local_tz)
+
     rest_start_time = end_time
     rest_end_time = rest_start_time + timedelta(minutes=15)
 
@@ -646,11 +661,11 @@ def add_rest_period(calendar_service, end_time):
         'description': 'Take a short break after the virtual meeting.',
         'start': {
             'dateTime': rest_start_time_str,
-            'timeZone': 'UTC',  # You can adjust the timezone as per your location
+            'timeZone': 'Europe/London',  
         },
         'end': {
             'dateTime': rest_end_time_str,
-            'timeZone': 'UTC',  # Adjust the timezone as necessary
+            'timeZone': 'Europe/London', 
         },
     }
 
@@ -741,12 +756,13 @@ def calculate_task_score(task):
             deadline = datetime.strptime(deadline, "%Y-%m-%d")
 
         # Ensure both deadline and current time are timezone-aware
-        if deadline.tzinfo is None:  # Naive deadline, make it aware
-            deadline = pytz.utc.localize(deadline)
+        if deadline.tzinfo is None:
+            deadline = local_tz.localize(deadline)  # Localize naive time
+        else:
+            deadline = deadline.astimezone(local_tz)
+
         if datetime.now().tzinfo is None:  # Naive current time, make it aware
-            current_time = datetime.now(pytz.utc)
-        else:  # Use current time with timezone if it's already aware
-            current_time = datetime.now()
+            current_time = datetime.now(pytz.utc).astimezone(local_tz)
 
         # Calculate difference between deadline and current time (in days)
         deadline_days = (deadline - current_time).days
@@ -781,18 +797,19 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
         task_type(literal): [work, personal]
         task_energy_level (literal): [low, medium, high]
         task_deadline (datetime): If deadline == none, then 31st-Dec-9999 is assigned within this function
+    Returns:
+        availabile_timeslots (dict): timeslots available for each task
 
     """
-    # Ensure the task deadline is offset-aware (e.g., UTC)
-    if task_deadline and task_deadline.tzinfo is None:
-        task_deadline = pytz.utc.localize(task_deadline)
-
     # Get the current time in UTC and make it offset-aware
-    current_time = datetime.utcnow().replace(microsecond=0, tzinfo=pytz.utc)
+    current_time = datetime.now(pytz.utc).astimezone(local_tz)
 
     # If task_deadline is None, assign it a far future date (e.g., 31st December 9999)
     if task_deadline is None:
-        task_deadline = datetime(9999, 12, 31, 23, 59, 59, tzinfo=pytz.utc)
+        task_deadline = datetime(9999, 12, 31, 23, 59, 59, tzinfo=pytz.utc).astimezone(local_tz)
+    else:
+        if task_deadline.tzinfo is None:
+            task_deadline = local_tz.localize(task_deadline)
 
     # Gather occupied slots from calendar events and make them offset-aware
     occupied_slots = []
@@ -800,9 +817,9 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
         start_time, end_time = parse_event_datetime(event)
         if start_time and end_time:
             if start_time.tzinfo is None:
-                start_time = pytz.utc.localize(start_time)
+                start_time = start_time.astimezone(local_tz)
             if end_time.tzinfo is None:
-                end_time = pytz.utc.localize(end_time)
+                end_time = end_time.astimezone(local_tz)
             occupied_slots.append((start_time, end_time))
 
     available_timeslots = {}
@@ -817,9 +834,9 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
 
             # Make slot times offset-aware (e.g., UTC)
             if slot_start.tzinfo is None:
-                slot_start = pytz.utc.localize(slot_start)
+                slot_start = slot_start.astimezone(local_tz) if slot_start.tzinfo else local_tz.localize(slot_start)
             if slot_end.tzinfo is None:
-                slot_end = pytz.utc.localize(slot_end)
+                slot_end = slot_start = slot_end.astimezone(local_tz) if slot_end.tzinfo else local_tz.localize(slot_end)
 
             # Skip slots that are in the past (start before the current time) or after the task's deadline
             if slot_start < current_time or slot_end > task_deadline:
@@ -838,7 +855,7 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
                     available_slots.append((slot_start, slot_end))
                 else:
                     # If the slot is partially available, break it into 15-minute chunks
-                    current_chunk_start = slot_start
+                    current_chunk_start = slot_start.astimezone(local_tz)
                     chunks = []  # List to store chunks
                     while current_chunk_start < slot_end:
                         current_chunk_end = min(current_chunk_start + timedelta(minutes=15), slot_end)
@@ -874,8 +891,8 @@ def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_en
     calendar_events: a list of immovable events (e.g., meetings) that occupy specific timeslots
     task_type (literal): ['Work', 'Personal']
     task_energy_level (literal): [low, medium, high]
-    task_deadline (datetime): task deadline (from Todoist). If no time set, 23:59:59 is assigned through  
-    """
+    task_deadline (datetime): task deadline (from Todoist). If no time set, 23:59:59 is assigned through get_available_timeslots
+        """
     suitable_timeslots = get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline)
     
     print("Suitable timeslots for the task:")
@@ -889,12 +906,10 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
     """
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
-
     Parameter(s):
         tasks (list): list of tasks from todoist 
         available_timeslots (dict): dictionary of unoccupied slots of equal or greater energy level and correct type [work, personal].
         occupied_slots (list): list of occupied slots from Google Calendar (e.g., meetings and other immovable tasks) 
-    
     Returns:
         scheduled_tasks (list):list of tasks that have been scheduled with their
     """
@@ -972,8 +987,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
                 break  # Task fully scheduled, exit the day loop
 
         if remaining_duration > timedelta(0):
-            print(f"Unable to fully schedule task: {task_name}. Remaining: {remaining_duration}")
-            #LOGGING
+            log_message("WARNING", f"Unable to fully schedule task: {task_name}. Remaining: {remaining_duration}")
 
     return scheduled_tasks
 
@@ -1068,7 +1082,6 @@ colour_mapping = {
 def schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id):
     """
     Schedule an event in Google Calendar with a specific colour based on task labels.
-
     Parameter(s):
         calendar_service: Google Calendar service instance.
         task_name (str): task name.
@@ -1089,8 +1102,8 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
     event = {
         'summary': task_name,
         'description': f'Scheduled by task scheduler \n Task ID: {task_id}',
-        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
-        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
+        'start': {'dateTime': start_time.astimezone(local_tz).isoformat(), 'timeZone': 'Europe/London'},
+        'end': {'dateTime': end_time.astimezone(local_tz).isoformat(), 'timeZone': 'Europe/London'},
         'colorId': task_colour,  # Set the event colour
     }
 
@@ -1173,8 +1186,8 @@ def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
                 # Prepare updated event data
                 updated_event = {
                     'summary': task_name,
-                    'start': {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'},
-                    'end': {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'},
+                    'start': {'dateTime': start_time.astimezone(local_tz).isoformat(), 'timeZone': 'Europe/London'},
+                    'end': {'dateTime': end_time.astimezone(local_tz).isoformat(), 'timeZone': 'Europe/London'},
                     'description': existing_event['description'],  # Keep original description
                     'colorId': next((colour_mapping.get(label) for label in labels if label in colour_mapping), None),
                 }
@@ -1188,7 +1201,8 @@ def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
         else:
             # No existing event — create a new one
             schedule_event(calendar_service, task_name, start_time, end_time, labels, task_id)
-        
+
+
 if __name__ == "__main__":
     try:
         # Refresh token if needed
@@ -1196,7 +1210,7 @@ if __name__ == "__main__":
         if creds:
             log_message("INFO", "Token refreshed successfully.")
         else:
-            print("Authentication required!")
+            log_message("ERROR", "Authentication required!")
 
         # Authenticate services
         sheets_service, calendar_service = authenticate_google_services()
@@ -1238,7 +1252,7 @@ if __name__ == "__main__":
                     end_time = pytz.utc.localize(end_time)
 
                 event_name = event.get("summary", "No Name")
-                print(f"Occupied Slot: {event_name} from {start_time} to {end_time}")
+                print(f"{event_name} from {start_time} to {end_time}")
                 occupied_slots.append((start_time, end_time))
 
         # Merge overlapping occupied slots
@@ -1247,9 +1261,9 @@ if __name__ == "__main__":
         # Calculate task scores and sort tasks by priority
         scored_tasks = [(task, calculate_task_score(task)) for task in parsed_tasks]
         scored_tasks = sorted(scored_tasks, key=lambda x: x[1], reverse=True)
-        print("\nPrioritized Tasks:")
+        print("\nPrioritised Tasks:")
         for task, score in scored_tasks:
-            print(f"Task: {task['name']}, Score: {score:.2f}")
+            print(f"{task['name']}, Score: {score:.2f}")
 
         # Generate and collect available time slots for each task
         available_timeslots = {}
@@ -1279,10 +1293,7 @@ if __name__ == "__main__":
         # Display the merged scheduled tasks
         print("\nScheduled Tasks:")
         for task in merged_scheduled_tasks:
-            log_message(
-                "INFO",
-                f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}",
-            )
+            log_message("INFO",f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}")
 
         # Add merged scheduled tasks to Google Calendar
         for scheduled_task in merged_scheduled_tasks:
