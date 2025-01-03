@@ -6,7 +6,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from todoist_api_python.api import TodoistAPI
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from dateutil import parser # Import robust ISO 8601 parser
 import pytz
 import re
@@ -32,7 +32,7 @@ def log_message(level, message):
     print(message)  # Immediate feedback
 
 # Set timezone dynamically
-local_tz = timezone('Europe/London') #Automatically handles transitions between GMT/BST 
+local_tz = pytz.timezone('Europe/London') #Automatically handles transitions between GMT/BST 
 
 # Load API keys - .env added to gitignore so these will not accidentally be uploaded to GitHub. 
 load_dotenv(dotenv_path="API_keys.env")
@@ -565,7 +565,7 @@ def parse_event_datetime(event):
         return None, None
         
 # Adds travel events before and after a meeting if it has a location
-def add_travel_event(calendar_service, task_name, travel_start, travel_end, location):
+def add_travel_event(calendar_service, task_name, travel_start, travel_end, location, end_time):
     """
     If a meeting has a location, then add travel time as separate events before/after the meeting
     Parameter(s):
@@ -689,26 +689,29 @@ def handle_meeting_with_location(calendar_service, event, location=None, travel_
     Returns:
         new event: creates travel time (in person) or screen-free time (if virtual)
     """
+    local_tz = pytz.timezone('Europe/London')
+
     # Handle both 'dateTime' and 'date' keys
     start_time_str = event['start'].get('dateTime', event['start'].get('date'))
     end_time_str = event['end'].get('dateTime', event['end'].get('date'))
 
     # Parse the start and end times
     start_time = parser.isoparse(start_time_str)
+    if start_time.tzinfo is None:
+        start_time = local_tz.localize(start_time)
+    
     end_time = parser.isoparse(end_time_str)
-
-    if location:
-        # Add travel time
+    if end_time.tzinfo is None:
+        end_time = local_tz.localize(end_time)
+    # if it's a virtual meeting add screen-free time, else add travel time
+    if is_virtual_meeting(event):
+        add_rest_period(calendar_service, end_time)
+    else:
         travel_duration = travel_time or 30  # Default to 30 minutes
         travel_start = start_time - timedelta(minutes=travel_duration)
         travel_end = start_time
-
         # Add travel events in Google Calendar
-        add_travel_event(calendar_service, event['summary'], travel_start, travel_end, location)
-
-    # If it's a virtual meeting, add rest period
-    if is_virtual_meeting(event):
-        add_rest_period(calendar_service, end_time)
+        add_travel_event(calendar_service, event['summary'], travel_start, travel_end, location, end_time)
 
 # -- Prioritisation of tasks
 # Mapping importance to a numerical value
