@@ -44,11 +44,13 @@ def add_task():
 
 # Function to adjust algorithm weightings
 def update_weightings():
-    priority_weight = priority_slider.get()
+    duration_weight = duration_slider.get()
+    energy_weight = energy_slider.get()
+    impact_weight = impact_slider.get()
     urgency_weight = urgency_slider.get()
-    effort_weight = effort_slider.get()
-    print(f"Updated Weights - Priority: {priority_weight:.2f}, Urgency: {urgency_weight:.2f}, Effort: {effort_weight:.2f}")
+    print(f"Updated Weights - Duration: {duration_weight:.2f}, Energy: {energy_weight:.2f}, Impact: {impact_weight:.2f} Urgency: {urgency_weight:.2f}")
 
+# Function to delete token.json to reset Google authentication
 def delete_token():
     if os.path.exists("token.json"):
         os.remove("token.json")
@@ -59,8 +61,8 @@ def delete_token():
 root = ttk.Window(themename='minty') 
 # Choose from: Light - cosmo, flatly, journal, litera, lumen, minty, pulse, sandstone, united, yeti, morph, simplex, cerculean
 # Choose from: Dark - solar, superhero, darkly, cyborg, vapor 
-root.title("Task Scheduler Assistant")
-root.geometry("800x500")  # Width x Height
+root.title("Virtual Assistant")
+#root.geometry("800x500")  # Width x Height
 
 # Create a Notebook widget for tabs
 notebook = ttk.Notebook(root)
@@ -130,41 +132,74 @@ weighting_tab.grid_columnconfigure(0, weight=1)  # Column 0 (Labels) fixed size
 weighting_tab.grid_columnconfigure(1, weight=3)  # Column 1 (Sliders) expands
 weighting_tab.grid_columnconfigure(2, weight=1)  # Column 2 (Value Labels) fixed size
 
-# Title Label
-weighting_label = ttk.Label(weighting_tab, text="Adjust Algorithm Weightings", font=("Helvetica", 16, "bold"))
-weighting_label.grid(row=0, column=0, columnspan=3, pady=10)
+frame = ttk.LabelFrame(weighting_tab, text=" Adjust Algorithm Weightings ", bootstyle="dark")  # Frame title and style
+frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew") 
 
 # Sliders for Algorithm Weights
 sliders = []  # To store all sliders for adjustment logic
 value_labels = []  # To store all slider value labels
 
-# Priority Weight Slider
-priority_label = ttk.Label(weighting_tab, text="Priority Weight:")
-priority_label.grid(row=1, column=0, padx=10)
+# Time Weight Slider
+duration_label = ttk.Label(frame, text="Task Duration Weight:")
+duration_label.grid(row=1, column=0, padx=10)
 
-priority_slider = ttk.Scale(weighting_tab, from_=0, to=1, orient="horizontal")
-priority_slider.grid(row=1, column=1, padx=10, sticky="ew")  # Expand horizontally
-priority_slider.set(0.5)
+duration_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
+duration_slider.grid(row=1, column=1, padx=10, sticky="ew")  # Expand horizontally
+duration_slider.set(0.2)
 
-priority_value_label = ttk.Label(weighting_tab, text="0.5")
-priority_value_label.grid(row=1, column=2, padx=10)
+duration_value_label = ttk.Label(frame, text="0.5")
+duration_value_label.grid(row=1, column=2, padx=10)
 
-priority_slider.bind(
-    "<ButtonRelease-1>", lambda e: on_slider_change(priority_slider, priority_value_label, sliders, value_labels)
+duration_slider.bind(
+    "<ButtonRelease-1>", lambda e: on_slider_change(duration_slider, duration_value_label, sliders, value_labels)
 )
-sliders.append(priority_slider)
-value_labels.append(priority_value_label)
+sliders.append(duration_slider)
+value_labels.append(duration_value_label)
+
+# Energy Weight Slider
+energy_label = ttk.Label(frame, text="Energy Weight:")
+energy_label.grid(row=2, column=0, padx=10)
+
+energy_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
+energy_slider.grid(row=2, column=1, padx=10, sticky="ew")
+energy_slider.set(0.4)
+
+energy_value_label = ttk.Label(frame, text="0.5")
+energy_value_label.grid(row=2, column=2, padx=10)
+
+energy_slider.bind(
+    "<ButtonRelease-1>", lambda e: on_slider_change(energy_slider, energy_value_label, sliders, value_labels)
+)
+sliders.append(energy_slider)
+value_labels.append(energy_value_label)
+
+# Impact Weight Slider
+impact_label = ttk.Label(frame, text="Impact Weight:")
+impact_label.grid(row=3, column=0, padx=10)
+
+impact_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
+impact_slider.grid(row=3, column=1, padx=10, sticky="ew")
+impact_slider.set(0.3)
+
+impact_value_label = ttk.Label(frame, text="0.0")
+impact_value_label.grid(row=3, column=2, padx=10)
+
+impact_slider.bind(
+    "<ButtonRelease-1>", lambda e: on_slider_change(impact_slider, impact_value_label, sliders, value_labels)
+)
+sliders.append(impact_slider)
+value_labels.append(impact_value_label)
 
 # Urgency Weight Slider
-urgency_label = ttk.Label(weighting_tab, text="Urgency Weight:")
-urgency_label.grid(row=2, column=0, padx=10)
+urgency_label = ttk.Label(frame, text="Urgency Weight:")
+urgency_label.grid(row=3, column=0, padx=10)
 
-urgency_slider = ttk.Scale(weighting_tab, from_=0, to=1, orient="horizontal")
-urgency_slider.grid(row=2, column=1, padx=10, sticky="ew")
-urgency_slider.set(0.5)
+urgency_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
+urgency_slider.grid(row=3, column=1, padx=10, sticky="ew")
+urgency_slider.set(0.1)
 
-urgency_value_label = ttk.Label(weighting_tab, text="0.5")
-urgency_value_label.grid(row=2, column=2, padx=10)
+urgency_value_label = ttk.Label(frame, text="0.0")
+urgency_value_label.grid(row=3, column=2, padx=10)
 
 urgency_slider.bind(
     "<ButtonRelease-1>", lambda e: on_slider_change(urgency_slider, urgency_value_label, sliders, value_labels)
@@ -172,35 +207,20 @@ urgency_slider.bind(
 sliders.append(urgency_slider)
 value_labels.append(urgency_value_label)
 
-# Effort Weight Slider
-effort_label = ttk.Label(weighting_tab, text="Effort Weight:")
-effort_label.grid(row=3, column=0, padx=10)
-
-effort_slider = ttk.Scale(weighting_tab, from_=0, to=1, orient="horizontal")
-effort_slider.grid(row=3, column=1, padx=10, sticky="ew")
-effort_slider.set(0.0)
-
-effort_value_label = ttk.Label(weighting_tab, text="0.0")
-effort_value_label.grid(row=3, column=2, padx=10)
-
-effort_slider.bind(
-    "<ButtonRelease-1>", lambda e: on_slider_change(effort_slider, effort_value_label, sliders, value_labels)
-)
-sliders.append(effort_slider)
-value_labels.append(effort_value_label)
-
 # Update Button
-update_button = ttk.Button(weighting_tab, text="Update Weightings", command=update_weightings)
+update_button = ttk.Button(frame, text="Update Weightings", command=update_weightings)
 update_button.grid(row=4, column=0, columnspan=3, pady=20)
 
+frame_2 = ttk.LabelFrame(weighting_tab, text=" The Danger Zone ", bootstyle="dark")  # Frame title and style
+frame_2.grid(row=1, column=0, padx=10, pady=10, sticky="ew") 
 ##### The Danger Zone
 # Low Spoon Mode Checkbutton
-spoon_mode = ttk.Checkbutton(weighting_tab, text="Low Spoon Mode", bootstyle="round-toggle")
+spoon_mode = ttk.Checkbutton(frame_2, text="Low Spoon Mode", bootstyle="round-toggle")
 spoon_mode.grid(row=5, column=0, columnspan=3, padx=10, pady=10)
 
-reset_token_label = ttk.Label(weighting_tab, text="Reset token - here is more text")
+reset_token_label = ttk.Label(frame_2, text="Reset token - here is more text")
 reset_token_label.grid(row=6, column=0, columnspan=3, padx=10)
-reset_token_button = ttk.Button(weighting_tab, text="Reset Token", bootstyle="danger", command=delete_token)
-reset_token_button.grid(row=7, column=0, columnspan=1, padx=10, pady=10)
+reset_token_button = ttk.Button(frame_2, text="Reset Token", bootstyle="danger", command=delete_token)
+reset_token_button.grid(row=7, column=0, columnspan=3, padx=10, pady=10)
 
 root.mainloop()
