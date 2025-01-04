@@ -147,7 +147,7 @@ duration_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
 duration_slider.grid(row=1, column=1, padx=10, sticky="ew")  # Expand horizontally
 duration_slider.set(0.2)
 
-duration_value_label = ttk.Label(frame, text="0.5")
+duration_value_label = ttk.Label(frame, text="0.2")
 duration_value_label.grid(row=1, column=2, padx=10)
 
 duration_slider.bind(
@@ -164,7 +164,7 @@ energy_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
 energy_slider.grid(row=2, column=1, padx=10, sticky="ew")
 energy_slider.set(0.4)
 
-energy_value_label = ttk.Label(frame, text="0.5")
+energy_value_label = ttk.Label(frame, text="0.4")
 energy_value_label.grid(row=2, column=2, padx=10)
 
 energy_slider.bind(
@@ -181,7 +181,7 @@ impact_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
 impact_slider.grid(row=3, column=1, padx=10, sticky="ew")
 impact_slider.set(0.3)
 
-impact_value_label = ttk.Label(frame, text="0.0")
+impact_value_label = ttk.Label(frame, text="0.3")
 impact_value_label.grid(row=3, column=2, padx=10)
 
 impact_slider.bind(
@@ -192,14 +192,14 @@ value_labels.append(impact_value_label)
 
 # Urgency Weight Slider
 urgency_label = ttk.Label(frame, text="Urgency Weight:")
-urgency_label.grid(row=3, column=0, padx=10)
+urgency_label.grid(row=4, column=0, padx=10)
 
 urgency_slider = ttk.Scale(frame, from_=0, to=1, orient="horizontal")
-urgency_slider.grid(row=3, column=1, padx=10, sticky="ew")
+urgency_slider.grid(row=4, column=1, padx=10, sticky="ew")
 urgency_slider.set(0.1)
 
-urgency_value_label = ttk.Label(frame, text="0.0")
-urgency_value_label.grid(row=3, column=2, padx=10)
+urgency_value_label = ttk.Label(frame, text="0.1")
+urgency_value_label.grid(row=4, column=2, padx=10)
 
 urgency_slider.bind(
     "<ButtonRelease-1>", lambda e: on_slider_change(urgency_slider, urgency_value_label, sliders, value_labels)
@@ -209,7 +209,7 @@ value_labels.append(urgency_value_label)
 
 # Update Button
 update_button = ttk.Button(frame, text="Update Weightings", command=update_weightings)
-update_button.grid(row=4, column=0, columnspan=3, pady=20)
+update_button.grid(row=5, column=0, columnspan=3, pady=20)
 
 frame_2 = ttk.LabelFrame(weighting_tab, text=" The Danger Zone ", bootstyle="dark")  # Frame title and style
 frame_2.grid(row=1, column=0, padx=10, pady=10, sticky="ew") 
