@@ -565,7 +565,7 @@ def parse_event_datetime(event):
         return None, None
         
 # Adds travel events before and after a meeting if it has a location
-def add_travel_event(calendar_service, task_name, travel_start, travel_end, location, end_time):
+def add_travel_event(calendar_service, task_name, travel_start, travel_end, location):
     """
     If a meeting has a location, then add travel time as separate events before/after the meeting
     Parameter(s):
@@ -578,40 +578,25 @@ def add_travel_event(calendar_service, task_name, travel_start, travel_end, loca
         new event: Travel events are created in Google Calendar
     """
     try:
-        # Add travel before the meeting
-        event_before = {
-            'summary': f'Travel to {task_name}',
-            'description': f'Travel time to {location}',
-            'start': {
-                'dateTime': travel_start.isoformat(),
-                'timeZone': 'Europe/London',
-            },
-            'end': {
-                'dateTime': travel_end.isoformat(),
-                'timeZone': 'Europe/London',
-            },
+        # Create a travel event
+        event = {
+            'summary': f'Travel for {task_name}',
+            'description': f'Travel time to/from {location}',
+            'start': {'dateTime': travel_start.isoformat(), 'timeZone': 'Europe/London'},
+            'end': {'dateTime': travel_end.isoformat(), 'timeZone': 'Europe/London'},
         }
-        calendar_service.events().insert(calendarId='primary', body=event_before).execute()
+        # Insert event into Google Calendar
+        calendar_service.events().insert(calendarId='primary', body=event).execute()
 
-        # Add travel after the meeting
-        event_after = {
-            'summary': f'Travel from {task_name}',
-            'description': f'Travel time from {location}',
-            'start': {
-                'dateTime': end_time.isoformat(),
-                'timeZone': 'Europe/London',
-            },
-            'end': {
-                'dateTime': (end_time + timedelta(minutes=30)).isoformat(),
-                'timeZone': 'Europe/London',
-            },
-        }
-        calendar_service.events().insert(calendarId='primary', body=event_after).execute()
+        # Log success and return times
+        log_message("INFO", f"Added travel time: {travel_start} to {travel_end}")
+        return travel_start, travel_end
 
-        print(f"Travel events added for task: {task_name}")
     except Exception as e:
-        print(f"Failed to add travel events for task {task_name}: {e}")
-
+        # Log errors and return None
+        log_message("ERROR", f"Failed to add travel event: {e}")
+        return None, None
+    
 def is_virtual_meeting(event):
     """ Parses event description and location to determine if this is a virtual meeting, with case insensitive matching for keywords
     Parameter(s):
@@ -643,43 +628,33 @@ def add_rest_period(calendar_service, end_time):
         new event: Travel events are created in Google Calendar
     """
     local_tz = pytz.timezone('Europe/London')
-    if end_time.tzinfo is None:  # If it's naive, localize it
+    if end_time.tzinfo is None:
         end_time = local_tz.localize(end_time)
-    else:  # Convert timezone-aware times to Europe/London
+    else:
         end_time = end_time.astimezone(local_tz)
 
+    # Define rest period
     rest_start_time = end_time
     rest_end_time = rest_start_time + timedelta(minutes=15)
 
-    # Format the times in the ISO 8601 format, which is required by the Google Calendar API
-    rest_start_time_str = rest_start_time.isoformat()
-    rest_end_time_str = rest_end_time.isoformat()
-
-    # Create the event details
+    # Create event
     event = {
         'summary': 'Screen-Free Time',
         'description': 'Take a short break after the virtual meeting.',
-        'start': {
-            'dateTime': rest_start_time_str,
-            'timeZone': 'Europe/London',  
-        },
-        'end': {
-            'dateTime': rest_end_time_str,
-            'timeZone': 'Europe/London', 
-        },
+        'start': {'dateTime': rest_start_time.isoformat(), 'timeZone': 'Europe/London'},
+        'end': {'dateTime': rest_end_time.isoformat(), 'timeZone': 'Europe/London'},
     }
 
     try:
-        #Insert the event into the Google Calendar
-        event_result = calendar_service.events().insert(calendarId='primary',body=event).execute()
-
-        #Log that the event was created successfully
-        log_message("INFO", f"Rest period added to Google Calendar: {event_result['summary']} from {rest_start_time_str} to {rest_end_time_str}")
+        calendar_service.events().insert(calendarId='primary', body=event).execute()
     except Exception as e:
-        log_message("ERROR", f"Failed to add rest period to Google Calendar: {e}")
+        log_message("ERROR", f"Failed to add screen-free time: {e}")
+
+    # Return start and end times
+    return rest_start_time, rest_end_time
 
 # Handle meeting with location and add travel time and rest period if virtual
-def handle_meeting_with_location(calendar_service, event, location=None, travel_time=None):
+def handle_meeting_with_location(calendar_service, event, location=None, travel_time=30, occupied_slots=[]):
     """ Add travel time and rest period after meeting if virtual.
     Parameter(s):
         calendar_service: Google Calendar service instance
@@ -689,30 +664,62 @@ def handle_meeting_with_location(calendar_service, event, location=None, travel_
     Returns:
         new event: creates travel time (in person) or screen-free time (if virtual)
     """
+    # Set timezone
     local_tz = pytz.timezone('Europe/London')
 
-    # Handle both 'dateTime' and 'date' keys
+    # Parse start and end times of the event
     start_time_str = event['start'].get('dateTime', event['start'].get('date'))
     end_time_str = event['end'].get('dateTime', event['end'].get('date'))
 
-    # Parse the start and end times
+    # Ensure times are parsed and timezone-aware
     start_time = parser.isoparse(start_time_str)
+    end_time = parser.isoparse(end_time_str)
+
     if start_time.tzinfo is None:
         start_time = local_tz.localize(start_time)
-    
-    end_time = parser.isoparse(end_time_str)
     if end_time.tzinfo is None:
         end_time = local_tz.localize(end_time)
-    # if it's a virtual meeting add screen-free time, else add travel time
-    if is_virtual_meeting(event):
-        add_rest_period(calendar_service, end_time)
-    else:
-        travel_duration = travel_time or 30  # Default to 30 minutes
-        travel_start = start_time - timedelta(minutes=travel_duration)
-        travel_end = start_time
-        # Add travel events in Google Calendar
-        add_travel_event(calendar_service, event['summary'], travel_start, travel_end, location, end_time)
 
+    # 1. Handle virtual meetings - Add a rest period
+    if is_virtual_meeting(event):
+        # Add 15-minute screen-free time
+        rest_start, rest_end = add_rest_period(calendar_service, end_time)
+
+        # Update occupied slots for the rest period
+        occupied_slots.append((rest_start, rest_end))
+
+    # 2. Handle in-person meetings - Add travel events
+    else:
+        # Add travel time BEFORE the meeting
+        travel_start = start_time - timedelta(minutes=travel_time)
+        travel_end = start_time
+
+        # Create the travel-to event
+        travel_before_start, travel_before_end = add_travel_event(
+            calendar_service, 
+            task_name=event['summary'], 
+            travel_start=travel_start, 
+            travel_end=travel_end, 
+            location=location
+        )
+        # Update occupied slots for travel time before
+        occupied_slots.append((travel_before_start, travel_before_end))
+
+        # Add travel time AFTER the meeting
+        travel_after_start = end_time
+        travel_after_end = end_time + timedelta(minutes=travel_time)
+
+        # Create the travel-from event
+        travel_after_start, travel_after_end = add_travel_event(
+            calendar_service, 
+            task_name=event['summary'], 
+            travel_start=travel_after_start, 
+            travel_end=travel_after_end, 
+            location=location
+        )
+        # Update occupied slots for travel time after
+        occupied_slots.append((travel_after_start, travel_after_end))
+        
 # -- Prioritisation of tasks
 # Mapping importance to a numerical value
 impact_mapping = {
@@ -1238,25 +1245,24 @@ if __name__ == "__main__":
         calendar_events = fetch_calendar_events(calendar_service)
         if not calendar_events:
             print("No upcoming events found.")
-        else:
-            for event in calendar_events:
-                location = event.get('location', None)
-                handle_meeting_with_location(calendar_service, event, location)
 
-        # Print occupied slots from calendar events 
-        print("\nOccupied Slots:")
-        occupied_slots = []  # List to hold occupied slots and automatically generated travel/ rest time
+        # Initialize occupied slots
+        occupied_slots = []  # <-- Defined before use!
+
+        # Handle meetings and add travel/rest time
         for event in calendar_events:
-            start_time, end_time = parse_event_datetime(event)
-            if start_time and end_time:
-                if start_time.tzinfo is None:
-                    start_time = pytz.utc.localize(start_time)
-                if end_time.tzinfo is None:
-                    end_time = pytz.utc.localize(end_time)
+            location = event.get('location', None)
+            handle_meeting_with_location(
+                calendar_service, 
+                event, 
+                location=location, 
+                occupied_slots=occupied_slots  # <-- Passed here
+            )
 
-                event_name = event.get("summary", "No Name")
-                print(f"{event_name} from {start_time} to {end_time}")
-                occupied_slots.append((start_time, end_time))
+        # Print occupied slots for debugging
+        print("\nOccupied Slots:")
+        for start_time, end_time in occupied_slots:
+            print(f"Occupied from {start_time} to {end_time}")
 
         # Merge overlapping occupied slots
         occupied_slots = merge_overlapping_intervals(occupied_slots)
