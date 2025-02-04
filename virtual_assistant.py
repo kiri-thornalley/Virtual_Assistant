@@ -491,15 +491,16 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
         events (list): a list of immovable events (e.g., meetings) that occupy specific timeslots
     """
     local_tz = pytz.timezone('Europe/London')
-     # Default time_min and time_max in local timezone
+
     if not time_min:
         time_min = datetime.now(pytz.utc).astimezone(local_tz).isoformat()
     if not time_max:
         time_max = (datetime.now(pytz.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
 
-    # Paginate through all events
     events = []
+    occupied_slots = []
     page_token = None
+
     while True:
         events_result = calendar_service.events().list(
             calendarId='primary',
@@ -510,18 +511,29 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             pageToken=page_token
         ).execute()
 
-        # Filter out programmatically created events
-        page_events = [
-            event for event in events_result.get('items', [])
-            if 'Scheduled by task scheduler ' not in event.get('description', '')
-        ]
-        events.extend(page_events)
+        for event in events_result.get('items', []):
+            event_summary = event.get('summary', '').lower()
+
+            # Skip programmatically created travel events
+            if 'travel for' in event_summary:
+                continue
+
+            if 'Screen-Free Time' in event_summary:
+                continue
+
+            if 'Scheduled by task scheduler ' in event.get('description', ''):
+                continue  # Ignore auto-scheduled tasks
+
+            start_time, end_time = parse_event_datetime(event)
+            if start_time and end_time:
+                occupied_slots.append((start_time, end_time))  # Add meeting as occupied slot
+                events.append(event)
 
         page_token = events_result.get('nextPageToken')
         if not page_token:
             break
 
-    return events
+    return events, occupied_slots  # Return meetings + occupied slots
 
 def ensure_datetime(value):
     """Ensure a value is a datetime object and make it timezone-aware with GMT/BST handling."""
@@ -985,7 +997,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
 
                 # Update the remaining task duration
                 remaining_duration -= allocated_duration
-                #print(f"      Remaining duration: {remaining_duration}")
+                #print(f"Remaining duration: {remaining_duration}")
 
                 # Add this allocated time to occupied slots to prevent future overlaps
                 occupied_slots.append((slot_start, slot_start + allocated_duration))
@@ -1241,30 +1253,23 @@ if __name__ == "__main__":
         if not energy_profile:
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
-        # Fetch calendar events from Google Calendar
-        calendar_events = fetch_calendar_events(calendar_service)
+        # Fetch calendar events and occupied slots from Google Calendar
+        calendar_events, occupied_slots = fetch_calendar_events(calendar_service)
+
         if not calendar_events:
             print("No upcoming events found.")
 
-        # Initialize occupied slots
-        occupied_slots = []  # <-- Defined before use!
+        # Debugging: Print occupied slots to verify meetings are being captured
+        print("\nOccupied Slots from Calendar Events:")
+        for start_time, end_time in occupied_slots:
+            print(f"Meeting from {start_time} to {end_time}")
 
         # Handle meetings and add travel/rest time
         for event in calendar_events:
             location = event.get('location', None)
-            handle_meeting_with_location(
-                calendar_service, 
-                event, 
-                location=location, 
-                occupied_slots=occupied_slots  # <-- Passed here
-            )
+            handle_meeting_with_location(calendar_service, event, location=location, occupied_slots=occupied_slots)
 
-        # Print occupied slots for debugging
-        print("\nOccupied Slots:")
-        for start_time, end_time in occupied_slots:
-            print(f"Occupied from {start_time} to {end_time}")
-
-        # Merge overlapping occupied slots
+        # Merge overlapping occupied slots before scheduling tasks
         occupied_slots = merge_overlapping_intervals(occupied_slots)
 
         # Calculate task scores and sort tasks by priority
