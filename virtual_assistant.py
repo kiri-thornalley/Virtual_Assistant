@@ -514,11 +514,8 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
         for event in events_result.get('items', []):
             event_summary = event.get('summary', '').lower()
 
-            # Skip programmatically created travel events
-            if 'travel for' in event_summary:
-                continue
-
-            if 'Screen-Free Time' in event_summary:
+            # Skip programmatically created travel/ screen-free events
+            if 'travel for' in event_summary or 'screen-free time' in event_summary:
                 continue
 
             if 'Scheduled by task scheduler ' in event.get('description', ''):
