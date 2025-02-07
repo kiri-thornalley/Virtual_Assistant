@@ -923,7 +923,7 @@ def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_en
             print(f"  From {start_time} to {end_time}")
 
 # -- Task scheduling logic. Using Greedy Algorithm
-def schedule_tasks(tasks, available_timeslots, occupied_slots):
+def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
     """
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
@@ -937,78 +937,69 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots):
     scheduled_tasks = []
 
     for task in tasks:
-        task_name = task['name']
+        task_id = task["id"]  # Use Task ID for checking
+
+        # Skip if task is already scheduled
+        if task_id in existing_tasks:
+            print(f"Task '{task['name']}' is already scheduled, skipping...")
+            continue  
+
         task_duration = timedelta(minutes=task['estimated_time'])
         remaining_duration = task_duration
 
-        if task_name not in available_timeslots:
-            print(f"No available timeslots for task: {task_name}")
+        if task['name'] not in available_timeslots:
+            print(f"No available timeslots for task: {task['name']}")
             continue
 
-        # Fetch the available timeslots for this task
-        task_timeslots = available_timeslots[task_name]
+        task_timeslots = available_timeslots[task['name']]
 
         for day, slots in sorted(task_timeslots.items()):
-            updated_slots = []  # To store updated slots after allocation
+            updated_slots = []  # Store updated slots after allocation
 
-            # Iterate over each slot for this day
-            for slot in slots[:]:  # Use a copy of slots to safely modify the original list
-                try:
-                    if isinstance(slot, tuple) and len(slot) == 2:
-                        slot_start, slot_end = slot  # Unpack the tuple
-                    else:
-                        print(f"Unexpected slot format: {slot}")  # Log the slot that caused the error
-                        continue  # Skip this slot if it doesn't match the expected format
-                except Exception as e:
-                    print(f"Error unpacking slot: {slot}. Error: {e}")
-                    continue  # Skip problematic slots
+            for slot in slots[:]:  # Copy slots list to modify safely
+                slot_start, slot_end = slot
 
                 # Check for overlap with occupied slots
-                is_available = True
-                for occupied_start, occupied_end in occupied_slots:
-                    if slot_start < occupied_end and slot_end > occupied_start:
-                        is_available = False
-                        break
+                is_available = all(
+                    not (slot_start < occupied_end and slot_end > occupied_start)
+                    for occupied_start, occupied_end in occupied_slots
+                )
 
                 if not is_available:
-                    continue  # Skip this slot if it overlaps with any occupied slot
+                    continue  # Skip this slot if it overlaps with an occupied slot
 
-                # Calculate the duration of the current slot
+                # Allocate task time
                 slot_duration = slot_end - slot_start
-                if remaining_duration <= timedelta(0):
-                    break  # Task is fully scheduled
-
-                # Allocate the task duration from the current slot
                 allocated_duration = min(slot_duration, remaining_duration)
+
                 scheduled_tasks.append({
-                    "task_name": task_name,
+                    "task_name": task["name"],
+                    "task_id": task_id,  # Store Task ID
                     "start_time": slot_start,
                     "end_time": slot_start + allocated_duration,
                     "day": day,
                 })
-                #print(f"      Allocated {allocated_duration} from {slot_start} to {slot_start + allocated_duration}")
+
+                # Ensure `occupied_slots` updates immediately
+                occupied_slots.append((slot_start, slot_start + allocated_duration))
 
                 # Update the remaining slot time
                 leftover_start = slot_start + allocated_duration
                 if leftover_start < slot_end:
-                    # The slot is partially used, add the remaining part
                     updated_slots.append((leftover_start, slot_end))
 
-                # Update the remaining task duration
                 remaining_duration -= allocated_duration
-                #print(f"Remaining duration: {remaining_duration}")
 
-                # Add this allocated time to occupied slots to prevent future overlaps
-                occupied_slots.append((slot_start, slot_start + allocated_duration))
+                if remaining_duration <= timedelta(0):
+                    break  # Task is fully scheduled
 
-            # Update the available slots for this day with the remaining available slots
-            available_timeslots[task_name][day] = updated_slots
+            available_timeslots[task['name']][day] = updated_slots  # Update available slots
 
             if remaining_duration <= timedelta(0):
-                break  # Task fully scheduled, exit the day loop
+                break  # Task fully scheduled
 
         if remaining_duration > timedelta(0):
-            log_message("WARNING", f"Unable to fully schedule task: {task_name}. Remaining: {remaining_duration}")
+            log_message("WARNING", f"Unable to fully schedule task: {task['name']}. Remaining: {remaining_duration}")
 
     return scheduled_tasks
 
@@ -1171,12 +1162,12 @@ def fetch_existing_events(calendar_service):
             existing_tasks[task_id] = event
 
         # Track travel events
-        if 'travel for' in event_summary:
+        elif 'travel for' in event_summary:
+            #use elif statement so that events are only classed as one of the following: task, travel time or screen free time. Much more efficient.
             existing_travel.add((start_time, end_time))
 
         # Track screen-free events
         elif 'screen-free time' in event_summary: 
-            #use elif statement so that travel/screen-free events are only classed as one of the above, rather than potentially both. Much more efficient.
             existing_rest.add((start_time, end_time)) 
     return existing_tasks, existing_travel, existing_rest
 
@@ -1322,7 +1313,7 @@ if __name__ == "__main__":
         # Schedule tasks using the greedy algorithm
         log_message("INFO", "Scheduling Tasks")
         scheduled_tasks = schedule_tasks(
-            [task for task, _ in scored_tasks], available_timeslots, occupied_slots
+            [task for task, _ in scored_tasks], available_timeslots, occupied_slots, existing_tasks
         )
 
         # Merge consecutive scheduled tasks into larger slots
@@ -1354,7 +1345,7 @@ if __name__ == "__main__":
                 task_id = None  # Fallback if no match is found
 
             # Schedule the task in Google Calendar with metadata
-            #manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
+        manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
 
         print("\nScheduling Complete.")
         
