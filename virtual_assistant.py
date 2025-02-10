@@ -1,12 +1,13 @@
 import logging
 import os
+import json
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from todoist_api_python.api import TodoistAPI
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import parser # Import robust ISO 8601 parser
 import pytz
 import re
@@ -126,6 +127,8 @@ headers = {
     'apikey': api_key,
     'User-Agent': 'Python/requests'
 }
+# Create Cache file for weather data, so that we don't continue to call the API every time the code reruns due to new meeting/task etc.
+weather_cache = 'weather_cache.json'
 
 def get_weather(): 
     """Retrieves the next 48 hours of data for the chosen weather station as JSON, keeps only time and feels-like temperature.
@@ -134,15 +137,30 @@ def get_weather():
     Returns:
         weather_data (list): A list which contains time and feels like temperature.
     """
-    # List to store weather data
-    weather_data = []
+    # See if we already have a valid cached version of the API call
+    if os.path.exists(weather_cache):
+        with open (weather_cache, "r") as file:
+            cache = json.load(file)
+            last_update = datetime.fromisoformat(cache["timestamp"])
+            # will not call the API again until 3 hours after the last time the cache updated
+            next_update = last_update + timedelta(hours=3) 
+           
+           #If cache still valid, return cache - do not call API
+            if datetime.now(timezone.utc) < next_update:
+                print(f"Using cached weather data (valid until {next_update.strftime('%H:%M')})")
+                return cache["weather_data"]
+    
+    #If cache is expired or does not exist, call the API
+    print ("Fetching new weather data from Met Office API. Please wait...")
+   
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()  # Raise an error for bad status codes
-
         # Parse the JSON response
         data = response.json()
-        
+        # List to store weather data
+        weather_data = []
+
         # Debug print to inspect the full response structure - uncomment this if weather station location has changed.
         #print("Raw Weather Data:")
         #print(data)
@@ -163,11 +181,16 @@ def get_weather():
                     weather_data.append({'time': time, 'feelsLikeTemperature': 'Data not available'})
         else:
             print("No valid features found in the response.")
+        # Save new data to cache file    
+        with open(weather_cache, "w") as file:
+            json.dump({"timestamp": datetime.now(timezone.utc).isoformat(), "weather_data": weather_data}, file)
+        return weather_data
+
     except requests.exceptions.HTTPError as http_err:
         print(f"HTTP error occurred: {http_err}")
     except requests.exceptions.RequestException as err:
         print(f"Other error occurred: {err}")
-    return weather_data
+    return [] #Return empty list if there is an error
 
 #search weather_data to confirm temperature is/isn't >22c in the next 48 hours.
 def weather_analysis(weather_data, threshold_temp=22):
