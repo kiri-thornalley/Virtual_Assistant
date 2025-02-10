@@ -12,6 +12,7 @@ from dateutil import parser # Import robust ISO 8601 parser
 import pytz
 import re
 import requests
+import time
 #import traceback #uncomment me if error messages in this code are giving you close to nothing to go on to solve it. 
 
 # --- Setup ---
@@ -141,7 +142,7 @@ def get_weather():
     if os.path.exists(weather_cache):
         with open (weather_cache, "r") as file:
             cache = json.load(file)
-            last_update = datetime.fromisoformat(cache["timestamp"])
+            last_update = datetime.fromisoformat(cache["timestamp"]).replace(tzinfo=timezone.utc)
             # will not call the API again until 3 hours after the last time the cache updated
             next_update = last_update + timedelta(hours=3) 
            
@@ -149,7 +150,7 @@ def get_weather():
             if datetime.now(timezone.utc) < next_update:
                 print(f"Using cached weather data (valid until {next_update.strftime('%H:%M')})")
                 return cache["weather_data"]
-    
+
     #If cache is expired or does not exist, call the API
     print ("Fetching new weather data from Met Office API. Please wait...")
    
@@ -591,9 +592,25 @@ def parse_event_datetime(event):
     try:
         start_time = event['start'].get('dateTime') or event['start'].get('date')
         end_time = event['end'].get('dateTime') or event['end'].get('date')
-        return ensure_datetime(start_time), ensure_datetime(end_time)
+
+        start_time = parser.isoparse(start_time)
+        end_time = parser.isoparse(end_time)
+
+        local_tz = pytz.timezone('Europe/London')
+
+        if start_time.tzinfo is None:
+            start_time = local_tz.localize(start_time, is_dst=None)
+        else:
+            start_time = start_time.astimezone(local_tz)
+
+        if end_time.tzinfo is None:
+            end_time = local_tz.localize(end_time, is_dst=None)
+        else:
+            end_time = end_time.astimezone(local_tz)
+        return start_time, end_time
+    
     except Exception as e:
-        print(f"An error occurred while parsing event times: {e}")
+        print(f"❌ Error parsing event datetime: {e}")
         return None, None
         
 # Adds travel events before and after a meeting if it has a location
@@ -730,9 +747,25 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
     start_time, end_time = parse_event_datetime(event)
 
     if start_time.tzinfo is None:
-        start_time = local_tz.localize(start_time)
+        try:
+            start_time = local_tz.localize(start_time, is_dst=None)
+        except pytz.NonExistentTimeError:
+            print(f"Non-existent time error for: {start_time}. Adjusting...")
+            start_time += timedelta(hours=1)  # Fix by shifting forward
+        except pytz.AmbiguousTimeError:
+            print(f"Ambiguous time error for: {start_time}. Assuming standard time...")
+            start_time = local_tz.localize(start_time, is_dst=False)  # Assume standard time
+
     if end_time.tzinfo is None:
-        end_time = local_tz.localize(end_time)
+        try:
+            end_time = local_tz.localize(end_time, is_dst=None)  # ✅ Safer handling
+        except pytz.NonExistentTimeError:
+            print(f"Non-existent time error for: {end_time}. Adjusting...")
+            end_time += timedelta(hours=1)  # ✅ Fix by shifting forward
+        except pytz.AmbiguousTimeError:
+            print(f"Ambiguous time error for: {end_time}. Assuming standard time...")
+            end_time = local_tz.localize(end_time, is_dst=False)  # ✅ Assume standard time
+
     # Get event_id for each event in Google Calendar that is not created programattically. 
     event_id = event.get('id', '')
     
@@ -1199,7 +1232,7 @@ def fetch_existing_events(calendar_service):
         existing_travel (set): a set of (start_time, end_time) tuples for travel events
         existing_rest (set): a set of (start_time, end_time) tuples for screen-free events
     """
-    time_min = datetime.utcnow().isoformat() + 'Z'  # Fetch from current time onwards
+    time_min = datetime.now(timezone.utc).isoformat()  # Fetch from current time onwards
     events_result = calendar_service.events().list(
         calendarId='primary',
         timeMin=time_min,
@@ -1298,6 +1331,7 @@ def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
 
 
 if __name__ == "__main__":
+    code_start = time.time()
     try:
         # Refresh token if needed
         creds = refresh_token_if_needed()
@@ -1412,10 +1446,11 @@ if __name__ == "__main__":
                 labels = []
                 task_id = None  # Fallback if no match is found
 
-            # Schedule the task in Google Calendar with metadata
-            manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
-
-        print("\nScheduling Complete.")
-        
+        # Schedule the task in Google Calendar with metadata
+        manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
+        code_end = time.time()
+        code_time = code_end - code_start
+        print(f"\nScheduling took {code_time:.2f} seconds to complete")
+            
     except Exception as e:
         print(f"An error occurred during execution: {e}")
