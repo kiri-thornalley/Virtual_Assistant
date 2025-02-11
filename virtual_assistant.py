@@ -517,9 +517,9 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
     local_tz = pytz.timezone('Europe/London')
 
     if not time_min:
-        time_min = datetime.now(pytz.utc).astimezone(local_tz).isoformat()
+        time_min = datetime.now(timezone.utc).isoformat()
     if not time_max:
-        time_max = (datetime.now(pytz.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
+        time_max = (datetime.now(timezone.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
 
     events = []
     occupied_slots = []
@@ -610,7 +610,7 @@ def parse_event_datetime(event):
         return start_time, end_time
     
     except Exception as e:
-        print(f"❌ Error parsing event datetime: {e}")
+        print(f"Error parsing event datetime: {e}")
         return None, None
         
 # Adds travel events before and after a meeting if it has a location
@@ -665,7 +665,7 @@ def is_virtual_meeting(event):
     # If neither description nor location indicates a virtual meeting, return False
     return False
 
-def add_rest_period(calendar_service, end_time):
+def add_rest_period(calendar_service, event_id, end_time):
     """ Adds a 15-minute screen-free period following a virtual meeting. Screen-free time added as a separate calendar event.
     Parameter(s):
         calendar_service: Google Calendar instance
@@ -686,7 +686,7 @@ def add_rest_period(calendar_service, end_time):
     # Create event
     event = {
         'summary': 'Screen-Free Time',
-        'description': 'Take a short break after the virtual meeting.',
+        'description': f'Take a short break after the virtual meeting./n Parent Meeting ID: {event_id}' ,
         'start': {'dateTime': rest_start_time.isoformat(), 'timeZone': 'Europe/London'},
         'end': {'dateTime': rest_end_time.isoformat(), 'timeZone': 'Europe/London'},
     }
@@ -712,22 +712,26 @@ def update_event(calendar_service, event_id, new_start, new_end):
     try:
         # Fetch the existing event
         event = calendar_service.events().get(calendarId='primary', eventId=event_id).execute()
+        
+        # Debug: Print current event details
+        print(f"🔍 Current event: {event_id} from {event['start']['dateTime']} to {event['end']['dateTime']}")
 
-        # Update start and end times
-        event['start']['dateTime'] = new_start.isoformat()
-        event['end']['dateTime'] = new_end.isoformat()
+        # Convert times to proper ISO format with 'Z' (UTC)
+        event['start']['dateTime'] = new_start.isoformat() + 'Z'
+        event['end']['dateTime'] = new_end.isoformat() + 'Z'
 
         # Send the update request
         updated_event = calendar_service.events().update(calendarId='primary', eventId=event_id, body=event).execute()
 
-        print(f"Updated event {event_id}: {new_start} to {new_end}")
+        print(f"✅ Updated event {event_id}: {new_start} to {new_end}")
         return updated_event
+
     except Exception as e:
-        print(f"Failed to update event {event_id}: {e}")
+        print(f"❌ Failed to update event {event_id}: {e}")
         return None
 
 # Handle meeting with location and add travel time and rest period if virtual
-def handle_meeting_with_location(calendar_service, event, existing_travel, existing_rest, location=None, travel_time=30, occupied_slots=[]): 
+def handle_meeting_with_location(calendar_service, event, existing_travel, existing_rest, location=None, travel_time=30, occupied_slots=[]):
     """ Add travel time (if in person) or rest period after meeting (if virtual).
     Parameter(s):
         calendar_service: Google Calendar service instance
@@ -758,13 +762,13 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
 
     if end_time.tzinfo is None:
         try:
-            end_time = local_tz.localize(end_time, is_dst=None)  # ✅ Safer handling
+            end_time = local_tz.localize(end_time, is_dst=None)  # Safer handling
         except pytz.NonExistentTimeError:
             print(f"Non-existent time error for: {end_time}. Adjusting...")
-            end_time += timedelta(hours=1)  # ✅ Fix by shifting forward
+            end_time += timedelta(hours=1)  # Fix by shifting forward
         except pytz.AmbiguousTimeError:
             print(f"Ambiguous time error for: {end_time}. Assuming standard time...")
-            end_time = local_tz.localize(end_time, is_dst=False)  # ✅ Assume standard time
+            end_time = local_tz.localize(end_time, is_dst=False)  # Assume standard time
 
     # Get event_id for each event in Google Calendar that is not created programattically. 
     event_id = event.get('id', '')
@@ -773,30 +777,41 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
     if is_virtual_meeting(event):
         # Calculate rest time, fetch existing rest time slots
         rest_start, rest_end = end_time, end_time + timedelta(minutes=15)
-        existing_rest_time = existing_rest.get(event_id) 
-        if existing_rest_time:
-            old_start, old_end = existing_rest_time
+        existing_rest_event = existing_rest.get(event_id)
+
+        if existing_rest_event:
+            rest_event_id, old_start, old_end = existing_rest_event
+
             if (old_start, old_end) != (rest_start, rest_end):
-                update_event(calendar_service, event_id, rest_start, rest_end)
-                log_message("INFO",f"Modifying screen-free event {event_id}...")
+                update_event(calendar_service, rest_event_id, rest_start, rest_end)
+                log_message("INFO", f"Modifying screen-free event {rest_event_id}...")
+
+                if (old_start, old_end) in occupied_slots:
+                    occupied_slots.remove((old_start, old_end))
+                occupied_slots.append((rest_start, rest_end))
+            else:
+                log_message("INFO", f"Screen-free time for {event_id} is already correct, skipping creation.")  # ✅ Prevent duplicate creation
+                return
         # If the rest time does not already exist, create event in calendar.
         else:
-            add_rest_period(calendar_service, end_time)
+            rest_event_id = add_rest_period(calendar_service, event_id, end_time)
+            existing_rest[event_id] = (rest_event_id, rest_start, rest_end) 
             occupied_slots.append((rest_start, rest_end))
             log_message("INFO", f"Created screen-free time for {event_id}: {rest_start} to {rest_end}")
                         
     # 2. Handle in-person meetings - Add travel events, or update if meeting moves.
     else:
         travel_before_start, travel_before_end = start_time - timedelta(minutes=travel_time), start_time
-        existing_travel_before = existing_travel.get(f"{event_id}_before")
-        if existing_travel_before:
-            old_start, old_end = existing_travel_before
+        existing_travel_before_event = existing_travel.get(f"{event_id}_before")
+
+        if existing_travel_before_event:
+            travel_event_id, old_start, old_end = existing_travel_before_event
             if (old_start, old_end) != (travel_before_start, travel_before_end):
-                update_event(calendar_service, event_id, travel_before_start, travel_before_end)
-                log_message("INFO", f"Modifying travel event {event_id} (before meeting)...")
+                update_event(calendar_service, travel_event_id, travel_before_start, travel_before_end)
+                log_message("INFO", f"Modifying travel event {travel_event_id} (before meeting)...")
         else:       
         # Create the travel-to event
-            add_travel_event(
+            travel_event_id = add_travel_event(
                 calendar_service, 
                 task_name=event['summary'], 
                 travel_start=travel_before_start, 
@@ -804,20 +819,22 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
                 location=location
             )
         # Update occupied slots for travel time before
+            existing_travel[f"{event_id}_before"] = (travel_event_id, travel_before_start, travel_before_end)
             occupied_slots.append((travel_before_start, travel_before_end))
-            log_message("INFO",f"Creating new travel event (before meeting) for {event_id}...")
+            log_message("INFO",f"Creating new travel event (before meeting) for for {travel_before_start} to {travel_before_end}...")
 
         # Add travel time AFTER the meeting
         travel_after_start, travel_after_end = end_time, end_time + timedelta(minutes=travel_time)
-        existing_travel_after = existing_travel.get(f"{event_id}_after")
-        if existing_travel_after:
-            old_start, old_end = existing_travel_after
+        existing_travel_after_event = existing_travel.get(f"{event_id}_after")
+
+        if existing_travel_after_event:
+            travel_event_id, old_start, old_end = existing_travel_after_event
             if (old_start, old_end) != (travel_after_start, travel_after_end):
-                update_event(calendar_service, event_id, travel_after_start, travel_after_end)
+                update_event(calendar_service, travel_event_id, travel_after_start, travel_after_end)
                 log_message("INFO", f"Modifying travel event {event_id} (after meeting)...")
         else:        
         # Create the travel-from event
-            add_travel_event(
+            travel_event_id = add_travel_event(
                 calendar_service, 
                 task_name=event['summary'], 
                 travel_start=travel_after_start, 
@@ -825,6 +842,7 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
                 location=location
             )
         # Update occupied slots for travel time after
+            existing_travel[f"{event_id}_after"] = (travel_event_id, travel_after_start, travel_after_end)
             occupied_slots.append((travel_after_start, travel_after_end))
             log_message("INFO", f"Creating new travel event (after meeting) for {travel_after_start} to {travel_after_end}")
 
@@ -1263,13 +1281,18 @@ def fetch_existing_events(calendar_service):
             existing_tasks[task_id] = event
 
         # Track travel events
-        elif 'travel for' in event_summary:
+        #elif 'travel for' in event_summary:
             #use elif statement so that events are only classed as one of the following: task, travel time or screen free time. Much more efficient.
-            existing_travel[event_id] = (start_time, end_time)
+            #existing_travel[event_id] = (event_id, start_time, end_time)
 
         # Track screen-free events
-        elif 'screen-free time' in event_summary: 
-            existing_rest[event_id] = (start_time, end_time) 
+        elif 'screen-free time' in event_summary:
+            parent_event_id = None
+            if 'Parent Meeting ID:' in event.get('description', ''):
+                parent_event_id = event.get('description', '').split('Parent Meeting ID:')[-1].strip()
+
+            if parent_event_id:
+                existing_rest[parent_event_id] = (event_id, start_time, end_time)
     return existing_tasks, existing_meetings, existing_travel, existing_rest
 
 def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
@@ -1374,12 +1397,12 @@ if __name__ == "__main__":
             print(f"Meeting from {start_time} to {end_time}")
 
         print("\n🚗 Existing Travel Events:")
-        for event_id, (start_time, end_time) in existing_travel.items():
-            print(f"Travel (Event ID: {event_id}) from {start_time} to {end_time}")
+        for event_id, (stored_event_id, start_time, end_time) in existing_travel.items():
+            print(f"Travel (Event ID: {stored_event_id}) from {start_time} to {end_time}")
 
         print("\n🕒 Existing Screen-Free Events:")
-        for event_id, (start_time, end_time) in existing_rest.items():
-            print(f"Screen-free time (Event ID: {event_id}) from {start_time} to {end_time}")
+        for event_id, (stored_event_id, start_time, end_time) in existing_rest.items():
+            print(f"Screen-free time (Event ID: {stored_event_id}) from {start_time} to {end_time}")
 
         # Handle meetings and add travel/rest time
         for event in calendar_events:
