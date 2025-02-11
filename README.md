@@ -42,7 +42,7 @@ Matches tasks to suitable time slots in your schedule based on:
 These features need adding before this Virtual Assistant is considered to be fully working:  
   * Lacks a Graphical User Interface - entirely runs in the terminal, output only really seen in Google Calendar. (Partial implementation of GUI currently underway)
   * No way to manually override scheduling behaviour ('Low Spoon Mode') - can currently botch it to completely stop scheduling by creating an all-day/ multiday event in Google Calendar.
-  * Timezone currently hardcoded as UTC, so does not yet handle BST.
+  * ~~ Timezone currently hardcoded as UTC, so does not yet handle BST. ~~
      
 These features are likely to appear in a later version:  
   * Does not currently understand the concept of [task switching](https://www.apa.org/topics/research/multitasking). Ideally, the virtual assistant would use the tags attached to each task to batch similar tasks together.
