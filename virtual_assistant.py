@@ -505,14 +505,20 @@ def fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=False
     
 ## -- Pulling meetings from Google Calendar, adding travel events/ screen-free time
 def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
-    """ Fetch events from Google Calendar - will not pull programmatically created tasks.
+    """ 
+    Fetches events from Google Calendar and categorizes them into meetings, tasks, travel, and screen-free time.
+    
     Parameters:
         calendar_service: Google Calendar service instance
-        time_min (datetime): start of time range to pull events
-        time_max (datetime): end of time range to search for events - 28 days
+        time_min (datetime): Start of time range to pull events (default: now)
+        time_max (datetime): End of time range to pull events (default: 28 days ahead)
     
     Returns:
-        events (list): a list of immovable events (e.g., meetings) that occupy specific timeslots
+        meetings (dict): {meeting_id: event_data}
+        tasks (dict): {task_id: event_data}
+        travel_times (dict): {meeting_id_before/after: (event_id, start_time, end_time)}
+        screen_free_times (dict): {meeting_id: (event_id, start_time, end_time)}
+        occupied_slots (list): [(start_time, end_time)] - List of occupied time slots (excludes tasks)
     """
     local_tz = pytz.timezone('Europe/London')
 
@@ -521,10 +527,13 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
     if not time_max:
         time_max = (datetime.now(timezone.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
 
-    events = []
+    meetings = {}
+    tasks = {}
+    travel_times = {}
+    screen_free_times = {}
     occupied_slots = []
-    page_token = None
 
+    page_token = None
     while True:
         events_result = calendar_service.events().list(
             calendarId='primary',
@@ -537,24 +546,69 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
 
         for event in events_result.get('items', []):
             event_summary = event.get('summary', '').lower()
-
-            # Skip programmatically created travel/ screen-free events
-            if 'travel for' in event_summary or 'screen-free time' in event_summary:
+            description = event.get('description', '').lower()
+            event_id = event.get('id', '')
+            start_time, end_time = parse_event_datetime(event)
+            print(f"\n🔍 DEBUG: Raw Event → {event_summary}")
+            print(f"🔍 DEBUG: Description → {description}")
+            # Skip events with no valid start/end time
+            if not start_time or not end_time:
+                print(f"⚠️ Warning: Skipping event with missing start or end time → {event_summary}")
                 continue
 
-            if 'Scheduled by task scheduler ' in event.get('description', ''):
-                continue  # Ignore auto-scheduled tasks
+            # **1️⃣ Categorize Meetings**
+            if ('scheduled by task scheduler' not in description and 
+                'travel for' not in event_summary and 
+                'screen-free time' not in event_summary):
+                
+                meetings[event_id] = event
+                occupied_slots.append((start_time, end_time))  # ✅ Mark time as occupied
+                print(f"✅ Identified as MEETING: {event_summary})") # DEBUG
+                continue  # A meeting cannot be another type of event
 
-            start_time, end_time = parse_event_datetime(event)
-            if start_time and end_time:
-                occupied_slots.append((start_time, end_time))  # Add meeting as occupied slot
-                events.append(event)
+            # **2️⃣ Categorize Tasks** (Tasks should NOT be in occupied_slots)
+            if "scheduled by task scheduler" in description.lower():
+                task_id_match = re.search(r"task id:\s*(\S+)", description)
+                if task_id_match:
+                    task_id = task_id_match.group(1).strip()
+                    tasks[task_id] = event  # ✅ Store event under task ID
+                print(f"✅ Identified as TASK: {event_summary})")  # ✅ Debugging
+                continue
+
+            # **3️⃣ Categorize Travel Time 🚗**
+            if "travel for" in event_summary.lower():
+                parent_event_id_match = re.search(r"parent meeting id:\s*(\S+)", description)
+                parent_event_id = parent_event_id_match.group(1).strip() if parent_event_id_match else None
+
+                if parent_event_id:
+                    if start_time < meetings.get(parent_event_id, {}).get('start_time', start_time):
+                        travel_times[f"{parent_event_id}_before"] = (event["id"], start_time, end_time)
+                    else:
+                        travel_times[f"{parent_event_id}_after"] = (event["id"], start_time, end_time)
+                        print(f"✅ Identified as TRAVEL EVENT: {event_summary}")  # ✅ Debugging
+                        continue  # ✅ Prevents double classification
+
+            # **4️⃣ Categorize Screen-Free Time 🕒**
+            if "screen-free time" in event_summary.lower():
+                parent_event_id_match = re.search(r"parent meeting id:\s*(\S+)", description)
+                parent_event_id = parent_event_id_match.group(1).strip() if parent_event_id_match else None
+
+                if parent_event_id:
+                    screen_free_times[parent_event_id] = (event_id, start_time, end_time)
+
+                occupied_slots.append((start_time, end_time))  # 
+                print(f"✅ Identified as SCREEN-FREE TIME: {event_summary}") 
+                continue  # ✅ Prevents double classification
 
         page_token = events_result.get('nextPageToken')
         if not page_token:
             break
-
-    return events, occupied_slots  # Return meetings + occupied slots
+    print(f"\nDEBUG: Meetings → {meetings.keys()}")
+    print(f"DEBUG: Tasks → {tasks.keys()}")
+    print(f"DEBUG: Travel Times → {travel_times.keys()}")
+    print(f"DEBUG: Screen-Free Times → {screen_free_times.keys()}")
+    print(f"DEBUG: Occupied Slots → {occupied_slots}")
+    return meetings, tasks, travel_times, screen_free_times, occupied_slots
 
 def ensure_datetime(value):
     """Ensure a value is a datetime object and make it timezone-aware with GMT/BST handling."""
@@ -614,7 +668,7 @@ def parse_event_datetime(event):
         return None, None
         
 # Adds travel events before and after a meeting if it has a location
-def add_travel_event(calendar_service, task_name, travel_start, travel_end, location):
+def add_travel_event(calendar_service, task_name,event_id, travel_start, travel_end, location):
     """
     If a meeting has a location, then add travel time as separate events before/after the meeting
     Parameter(s):
@@ -630,7 +684,7 @@ def add_travel_event(calendar_service, task_name, travel_start, travel_end, loca
         # Create a travel event
         event = {
             'summary': f'Travel for {task_name}',
-            'description': f'Travel time to/from {location}',
+            'description': f'Travel time to/from {location} Parent Meeting ID: {event_id}',
             'start': {'dateTime': travel_start.isoformat(), 'timeZone': 'Europe/London'},
             'end': {'dateTime': travel_end.isoformat(), 'timeZone': 'Europe/London'},
         }
@@ -686,7 +740,7 @@ def add_rest_period(calendar_service, event_id, end_time):
     # Create event
     event = {
         'summary': 'Screen-Free Time',
-        'description': f'Take a short break after the virtual meeting./n Parent Meeting ID: {event_id}' ,
+        'description': f'Take a short break after the virtual meeting.\n Parent Meeting ID: {event_id}' ,
         'start': {'dateTime': rest_start_time.isoformat(), 'timeZone': 'Europe/London'},
         'end': {'dateTime': rest_end_time.isoformat(), 'timeZone': 'Europe/London'},
     }
@@ -731,7 +785,7 @@ def update_event(calendar_service, event_id, new_start, new_end):
         return None
 
 # Handle meeting with location and add travel time and rest period if virtual
-def handle_meeting_with_location(calendar_service, event, existing_travel, existing_rest, location=None, travel_time=30, occupied_slots=[]):
+def handle_meeting_with_location(calendar_service, event, travel_times, screen_free_times, location=None, travel_time=30, occupied_slots=[]):
     """ Add travel time (if in person) or rest period after meeting (if virtual).
     Parameter(s):
         calendar_service: Google Calendar service instance
@@ -750,101 +804,75 @@ def handle_meeting_with_location(calendar_service, event, existing_travel, exist
     # Parse start and end times of the event
     start_time, end_time = parse_event_datetime(event)
 
+    if not start_time or not end_time:
+        print(f"⚠️ Warning: Skipping event with missing start or end time → {event.get('summary', 'Unnamed Event')}")
+        return
+
+    # Ensure times are timezone-aware
     if start_time.tzinfo is None:
-        try:
-            start_time = local_tz.localize(start_time, is_dst=None)
-        except pytz.NonExistentTimeError:
-            print(f"Non-existent time error for: {start_time}. Adjusting...")
-            start_time += timedelta(hours=1)  # Fix by shifting forward
-        except pytz.AmbiguousTimeError:
-            print(f"Ambiguous time error for: {start_time}. Assuming standard time...")
-            start_time = local_tz.localize(start_time, is_dst=False)  # Assume standard time
-
+        start_time = local_tz.localize(start_time)
     if end_time.tzinfo is None:
-        try:
-            end_time = local_tz.localize(end_time, is_dst=None)  # Safer handling
-        except pytz.NonExistentTimeError:
-            print(f"Non-existent time error for: {end_time}. Adjusting...")
-            end_time += timedelta(hours=1)  # Fix by shifting forward
-        except pytz.AmbiguousTimeError:
-            print(f"Ambiguous time error for: {end_time}. Assuming standard time...")
-            end_time = local_tz.localize(end_time, is_dst=False)  # Assume standard time
+        end_time = local_tz.localize(end_time)
 
-    # Get event_id for each event in Google Calendar that is not created programattically. 
     event_id = event.get('id', '')
-    
-    # 1. Handle virtual meetings - Add a rest period
+
+    # **1️⃣ Handle Virtual Meetings - Add a Rest Period**
     if is_virtual_meeting(event):
-        # Calculate rest time, fetch existing rest time slots
         rest_start, rest_end = end_time, end_time + timedelta(minutes=15)
-        existing_rest_event = existing_rest.get(event_id)
+        existing_rest_event = screen_free_times.get(event_id)
 
         if existing_rest_event:
             rest_event_id, old_start, old_end = existing_rest_event
-
             if (old_start, old_end) != (rest_start, rest_end):
                 update_event(calendar_service, rest_event_id, rest_start, rest_end)
-                log_message("INFO", f"Modifying screen-free event {rest_event_id}...")
-
-                if (old_start, old_end) in occupied_slots:
-                    occupied_slots.remove((old_start, old_end))
+                log_message("INFO", f"Updated screen-free time {rest_event_id}.")
+                occupied_slots.remove((old_start, old_end))
                 occupied_slots.append((rest_start, rest_end))
             else:
-                log_message("INFO", f"Screen-free time for {event_id} is already correct, skipping creation.")  # ✅ Prevent duplicate creation
-                return
-        # If the rest time does not already exist, create event in calendar.
+                log_message("INFO", f"Screen-free time for {event_id} is already correct. Skipping update.")
         else:
             rest_event_id = add_rest_period(calendar_service, event_id, end_time)
-            existing_rest[event_id] = (rest_event_id, rest_start, rest_end) 
+            screen_free_times[event_id] = (rest_event_id, rest_start, rest_end)
             occupied_slots.append((rest_start, rest_end))
             log_message("INFO", f"Created screen-free time for {event_id}: {rest_start} to {rest_end}")
-                        
-    # 2. Handle in-person meetings - Add travel events, or update if meeting moves.
+
+    # **2️⃣ Handle In-Person Meetings - Add Travel Time**
     else:
         travel_before_start, travel_before_end = start_time - timedelta(minutes=travel_time), start_time
-        existing_travel_before_event = existing_travel.get(f"{event_id}_before")
+        existing_travel_before = travel_times.get(f"{event_id}_before")
 
-        if existing_travel_before_event:
-            travel_event_id, old_start, old_end = existing_travel_before_event
+        if existing_travel_before:
+            travel_event_id, old_start, old_end = existing_travel_before
             if (old_start, old_end) != (travel_before_start, travel_before_end):
                 update_event(calendar_service, travel_event_id, travel_before_start, travel_before_end)
-                log_message("INFO", f"Modifying travel event {travel_event_id} (before meeting)...")
-        else:       
-        # Create the travel-to event
-            travel_event_id = add_travel_event(
-                calendar_service, 
-                task_name=event['summary'], 
-                travel_start=travel_before_start, 
-                travel_end=travel_before_end, 
-                location=location
-            )
-        # Update occupied slots for travel time before
-            existing_travel[f"{event_id}_before"] = (travel_event_id, travel_before_start, travel_before_end)
+                log_message("INFO", f"Updated travel event (before meeting) {travel_event_id}.")
+                occupied_slots.remove((old_start, old_end))
+                occupied_slots.append((travel_before_start, travel_before_end))
+            else:
+                log_message("INFO", f"Travel event (before meeting) for {event_id} is already correct. Skipping update.")
+        else:
+            travel_event_id = add_travel_event(calendar_service, "Travel to Meeting", event_id, travel_before_start, travel_before_end, location)
+            travel_times[f"{event_id}_before"] = (travel_event_id, travel_before_start, travel_before_end)
             occupied_slots.append((travel_before_start, travel_before_end))
-            log_message("INFO",f"Creating new travel event (before meeting) for for {travel_before_start} to {travel_before_end}...")
+            log_message("INFO", f"Created travel event (before meeting) for {event_id}: {travel_before_start} to {travel_before_end}")
 
-        # Add travel time AFTER the meeting
         travel_after_start, travel_after_end = end_time, end_time + timedelta(minutes=travel_time)
-        existing_travel_after_event = existing_travel.get(f"{event_id}_after")
+        existing_travel_after = travel_times.get(f"{event_id}_after")
 
-        if existing_travel_after_event:
-            travel_event_id, old_start, old_end = existing_travel_after_event
+        if existing_travel_after:
+            travel_event_id, old_start, old_end = existing_travel_after
             if (old_start, old_end) != (travel_after_start, travel_after_end):
                 update_event(calendar_service, travel_event_id, travel_after_start, travel_after_end)
-                log_message("INFO", f"Modifying travel event {event_id} (after meeting)...")
-        else:        
-        # Create the travel-from event
-            travel_event_id = add_travel_event(
-                calendar_service, 
-                task_name=event['summary'], 
-                travel_start=travel_after_start, 
-                travel_end=travel_after_end, 
-                location=location
-            )
-        # Update occupied slots for travel time after
-            existing_travel[f"{event_id}_after"] = (travel_event_id, travel_after_start, travel_after_end)
+                log_message("INFO", f"Updated travel event (after meeting) {travel_event_id}.")
+                occupied_slots.remove((old_start, old_end))
+                occupied_slots.append((travel_after_start, travel_after_end))
+            else:
+                log_message("INFO", f"Travel event (after meeting) for {event_id} is already correct. Skipping update.")
+        else:
+            travel_event_id = add_travel_event(calendar_service, "Travel from Meeting", event_id, travel_after_start, travel_after_end, location)
+            travel_times[f"{event_id}_after"] = (travel_event_id, travel_after_start, travel_after_end)
             occupied_slots.append((travel_after_start, travel_after_end))
-            log_message("INFO", f"Creating new travel event (after meeting) for {travel_after_start} to {travel_after_end}")
+            log_message("INFO", f"Created travel event (after meeting) for {event_id}: {travel_after_start} to {travel_after_end}")
 
 # -- Prioritisation of tasks
 # Mapping importance to a numerical value
@@ -922,14 +950,14 @@ def convert_energy_level_to_int(energy_level):
     energy_mapping = {'low': 1, 'medium': 2, 'high': 3}
     return energy_mapping.get(energy_level.lower(), 0)
 
-def get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline):
+def get_available_timeslots(energy_profile, occupied_slots, task_type, task_energy_level, task_deadline):
     """
     Determines available timeslots by comparing energy profile and occupied slots from the calendar,
     and filters them based on the task's energy level, deadline, and current time.
     Handles partially available slots and updates the available slots accordingly.
     Parameter(s):
         energy_profile (dict): Uses date as the key, holds timeslot start and end, and it's associated energy value as string.
-        calendar_events(list): a list of immovable events (e.g., meetings) that occupy specific timeslots
+        occupied_slots (list): a list of immovable events (e.g., meetings) that occupy specific timeslots
         task_type(literal): [work, personal]
         task_energy_level (literal): [low, medium, high]
         task_deadline (datetime): If deadline == none, then 31st-Dec-9999 is assigned within this function
@@ -937,90 +965,80 @@ def get_available_timeslots(energy_profile, calendar_events, task_type, task_ene
         availabile_timeslots (dict): timeslots available for each task
 
     """
-    # Get the current time in UTC and make it offset-aware
-    current_time = datetime.now(pytz.utc).astimezone(local_tz)
+    local_tz = pytz.timezone('Europe/London')
 
-    # If task_deadline is None, assign it a far future date (e.g., 31st December 9999)
+    # Get the current time and convert to local timezone
+    current_time = datetime.now(timezone.utc).astimezone(local_tz)
+
+    # Ensure task_deadline is timezone-aware
     if task_deadline is None:
-        task_deadline = datetime(9999, 12, 31, 23, 59, 59, tzinfo=pytz.utc).astimezone(local_tz)
-    else:
-        if task_deadline.tzinfo is None:
-            task_deadline = local_tz.localize(task_deadline)
-
-    # Gather occupied slots from calendar events and make them offset-aware
-    occupied_slots = []
-    for event in calendar_events:
-        start_time, end_time = parse_event_datetime(event)
-        if start_time and end_time:
-            if start_time.tzinfo is None:
-                start_time = start_time.astimezone(local_tz)
-            if end_time.tzinfo is None:
-                end_time = end_time.astimezone(local_tz)
-            occupied_slots.append((start_time, end_time))
+        task_deadline = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc).astimezone(local_tz)
+    elif task_deadline.tzinfo is None:
+        task_deadline = local_tz.localize(task_deadline)
 
     available_timeslots = {}
 
     for day, slots in energy_profile.items():
-        available_slots = []  # Initialize available_slots for each day
-        
+        available_slots = []  # Store available slots for this day
+
         for slot in slots:
             slot_start, slot_end = slot["time_range"]
-            slot_start = ensure_datetime(slot_start)
-            slot_end = ensure_datetime(slot_end)
+            slot_start, slot_end = ensure_datetime(slot_start), ensure_datetime(slot_end)
 
-            # Make slot times offset-aware (e.g., UTC)
+            # Ensure slot times are timezone-aware
             if slot_start.tzinfo is None:
-                slot_start = slot_start.astimezone(local_tz) if slot_start.tzinfo else local_tz.localize(slot_start)
+                slot_start = local_tz.localize(slot_start)
             if slot_end.tzinfo is None:
-                slot_end = slot_start = slot_end.astimezone(local_tz) if slot_end.tzinfo else local_tz.localize(slot_end)
+                slot_end = local_tz.localize(slot_end)
 
-            # Skip slots that are in the past (start before the current time) or after the task's deadline
-            if slot_start < current_time or slot_end > task_deadline:
+            # **1️⃣ Skip Slots Outside Valid Time Range**
+            if slot_end <= current_time or slot_start >= task_deadline:
                 continue
 
-            # Convert energy levels to integers for comparison
-            slot_energy_level = convert_energy_level_to_int(slot["energy_level"])
-            task_energy_level_int = convert_energy_level_to_int(task_energy_level)
+            # **2️⃣ Remove Fully Occupied Slots Before Processing**
+            fully_available_parts = [(slot_start, slot_end)]
+            for occupied_start, occupied_end in occupied_slots:
+                temp_parts = []
+                for free_start, free_end in fully_available_parts:
+                    if free_start >= occupied_start and free_end <= occupied_end:
+                        continue  # Skip fully occupied slots
+                    elif free_start < occupied_start < free_end:
+                        temp_parts.append((free_start, occupied_start))
+                    elif free_start < occupied_end < free_end:
+                        temp_parts.append((occupied_end, free_end))
+                    else:
+                        temp_parts.append((free_start, free_end))
+                fully_available_parts = temp_parts
 
-            # Check if slot matches task type and energy level
-            if slot_energy_level >= task_energy_level_int and slot["task_type"] == task_type:
-                slot_duration = slot_end - slot_start
+            # **3️⃣ Process Only the Available Portions**
+            for free_start, free_end in fully_available_parts:
+                slot_duration = free_end - free_start
+                slot_energy_level = convert_energy_level_to_int(slot["energy_level"])
+                task_energy_level_int = convert_energy_level_to_int(task_energy_level)
 
-                # If the slot is fully available and large enough, use it directly
-                if slot_duration >= timedelta(minutes=task["estimated_time"]):
-                    available_slots.append((slot_start, slot_end))
-                else:
-                    # If the slot is partially available, break it into 15-minute chunks
-                    current_chunk_start = slot_start.astimezone(local_tz)
-                    chunks = []  # List to store chunks
-                    while current_chunk_start < slot_end:
-                        current_chunk_end = min(current_chunk_start + timedelta(minutes=15), slot_end)
-
-                        # Check if the chunk overlaps with any occupied slots
-                        is_available = True
-                        for occupied_start, occupied_end in occupied_slots:
-                            if current_chunk_start < occupied_end and current_chunk_end > occupied_start:
-                                is_available = False
-                                break
-
-                        if is_available:
+                # **Check Energy Level & Task Type**
+                if slot_energy_level >= task_energy_level_int and slot["task_type"] == task_type:
+                    if slot_duration >= timedelta(minutes=task["estimated_time"]):
+                        available_slots.append((free_start, free_end))
+                    else:
+                        # Handle small slots in 15-minute chunks
+                        current_chunk_start = free_start
+                        chunks = []
+                        while current_chunk_start < free_end:
+                            current_chunk_end = min(current_chunk_start + timedelta(minutes=15), free_end)
                             chunks.append((current_chunk_start, current_chunk_end))
+                            current_chunk_start = current_chunk_end
 
-                        # Move to the next chunk
-                        current_chunk_start = current_chunk_end
-
-                    # If there are chunks, merge them into one larger slot
-                    if chunks:
-                        merged_start = chunks[0][0]
-                        merged_end = chunks[-1][1]
-                        available_slots.append((merged_start, merged_end))
+                        # Merge consecutive chunks into a larger slot
+                        if chunks:
+                            available_slots.append((chunks[0][0], chunks[-1][1]))
 
         if available_slots:
             available_timeslots[day] = available_slots
 
     return available_timeslots
 
-def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline):
+def print_suitable_timeslots(energy_profile, occupied_slots, task_type, task_energy_level, task_deadline):
     """ Prints all possible suitable timeslots for a given task that exist between now and task deadline. Mostly used for debugging purposes.
     Parameter(s):
     energy_profile (dict): data from Google Sheets, then extended to the next 28 days through fetch_working_hours_and_energy_levels
@@ -1029,7 +1047,7 @@ def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_en
     task_energy_level (literal): [low, medium, high]
     task_deadline (datetime): task deadline (from Todoist). If no time set, 23:59:59 is assigned through get_available_timeslots
         """
-    suitable_timeslots = get_available_timeslots(energy_profile, calendar_events, task_type, task_energy_level, task_deadline)
+    suitable_timeslots = get_available_timeslots(energy_profile, occupied_slots, task_type, task_energy_level, task_deadline)
     
     print("Suitable timeslots for the task:")
     for day, slots in suitable_timeslots.items():
@@ -1038,7 +1056,7 @@ def print_suitable_timeslots(energy_profile, calendar_events, task_type, task_en
             print(f"  From {start_time} to {end_time}")
 
 # -- Task scheduling logic. Using Greedy Algorithm
-def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
+def schedule_tasks(parsed_tasks, available_timeslots, occupied_slots, existing_tasks):
     """
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
@@ -1050,71 +1068,61 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
         scheduled_tasks (list):list of tasks that have been scheduled with their
     """
     scheduled_tasks = []
+    local_tz = pytz.timezone('Europe/London')
 
-    for task in tasks:
-        task_id = task["id"]  # Use Task ID for checking
+    for task in parsed_tasks:
+        task_name = task["name"]
+        task_id = task["id"]
+        task_type = task["task_type"]
+        task_energy_level = task["energy_level"]
+        task_duration = timedelta(minutes=task["estimated_time"])
 
-        # Skip if task is already scheduled
+        # **1️⃣ If Task Already Exists, Use Existing Time**
         if task_id in existing_tasks:
-            print(f"Task '{task['name']}' is already scheduled, skipping...")
-            continue  
+            existing_event = existing_tasks[task_id]
+            start_time, end_time = parse_event_datetime(existing_event)
+            scheduled_tasks.append({
+                "task_id": task_id,
+                "task_name": task_name,
+                "start_time": start_time,
+                "end_time": end_time
+            })
+            log_message("INFO", f"Task '{task_name}' already scheduled from {start_time} to {end_time}. Skipping rescheduling.")
+            continue  # ✅ Prevents duplicate scheduling
 
-        task_duration = timedelta(minutes=task['estimated_time'])
-        remaining_duration = task_duration
+        # **2️⃣ Try to Schedule Task in Available Slots**
+        scheduled = False
+        for day, slots in available_timeslots.items():
+            for slot_start, slot_end in slots:
+                if slot_end - slot_start >= task_duration:
+                    task_start = slot_start
+                    task_end = task_start + task_duration
 
-        if task['name'] not in available_timeslots:
-            print(f"No available timeslots for task: {task['name']}")
-            continue
+                    # **Ensure Task Doesn't Overlap Occupied Slots**
+                    overlaps = any(
+                        occupied_start < task_end and occupied_end > task_start
+                        for occupied_start, occupied_end in occupied_slots
+                    )
+                    if overlaps:
+                        continue  # ❌ Skip if there's an overlap
 
-        task_timeslots = available_timeslots[task['name']]
+                    # **3️⃣ Book the Task and Update Occupied Slots**
+                    scheduled_tasks.append({
+                        "task_id": task_id,
+                        "task_name": task_name,
+                        "start_time": task_start,
+                        "end_time": task_end
+                    })
+                    occupied_slots.append((task_start, task_end))
+                    #log_message("INFO", f"Scheduled task '{task_name}' from {task_start} to {task_end}.")
+                    scheduled = True
+                    break 
 
-        for day, slots in sorted(task_timeslots.items()):
-            updated_slots = []  # Store updated slots after allocation
+            if scheduled:
+                break
 
-            for slot in slots[:]:  # Copy slots list to modify safely
-                slot_start, slot_end = slot
-
-                # Check for overlap with occupied slots
-                is_available = all(
-                    not (slot_start < occupied_end and slot_end > occupied_start)
-                    for occupied_start, occupied_end in occupied_slots
-                )
-
-                if not is_available:
-                    continue  # Skip this slot if it overlaps with an occupied slot
-
-                # Allocate task time
-                slot_duration = slot_end - slot_start
-                allocated_duration = min(slot_duration, remaining_duration)
-
-                scheduled_tasks.append({
-                    "task_name": task["name"],
-                    "task_id": task_id,  # Store Task ID
-                    "start_time": slot_start,
-                    "end_time": slot_start + allocated_duration,
-                    "day": day,
-                })
-
-                # Ensure `occupied_slots` updates immediately
-                occupied_slots.append((slot_start, slot_start + allocated_duration))
-
-                # Update the remaining slot time
-                leftover_start = slot_start + allocated_duration
-                if leftover_start < slot_end:
-                    updated_slots.append((leftover_start, slot_end))
-
-                remaining_duration -= allocated_duration
-
-                if remaining_duration <= timedelta(0):
-                    break  # Task is fully scheduled
-
-            available_timeslots[task['name']][day] = updated_slots  # Update available slots
-
-            if remaining_duration <= timedelta(0):
-                break  # Task fully scheduled
-
-        if remaining_duration > timedelta(0):
-            log_message("WARNING", f"Unable to fully schedule task: {task['name']}. Remaining: {remaining_duration}")
+        if not scheduled:
+            log_message("WARNING", f"No available timeslot found for task '{task_name}'. Check task deadline and/or consider altering priorities")
 
     return scheduled_tasks
 
@@ -1129,17 +1137,15 @@ def merge_scheduled_tasks(scheduled_tasks):
     if not scheduled_tasks:
         return []
 
-    # Sort tasks by task_name, day, and start_time for proper merging
-    scheduled_tasks.sort(key=lambda x: (x["task_name"], x["day"], x["start_time"]))
-
+    # Sort tasks by task_name, day (as start_time.date() ), and start_time for proper merging
+    scheduled_tasks.sort(key=lambda x: (x["task_name"], x["start_time"].date(), x["start_time"]))
     merged_tasks = []
     current_task = scheduled_tasks[0]
-
     for next_task in scheduled_tasks[1:]:
         # Check if the next task is consecutive and belongs to the same task and day
         if (
             next_task["task_name"] == current_task["task_name"]
-            and next_task["day"] == current_task["day"]
+            and next_task["start_time"].date() == current_task["start_time"].date()
             and next_task["start_time"] == current_task["end_time"]
         ):
             # Extend the current task's end_time
@@ -1240,62 +1246,7 @@ def schedule_event(calendar_service, task_name, start_time, end_time, labels, ta
     except Exception as e:
         print(f"Failed to schedule task '{task_name}': {e}")
 
-def fetch_existing_events(calendar_service):
-    """
-    Fetch existing events from Google Calendar with task metadata. Also tracks previously created travel time and screen-free time events.
-    Parameter(s):
-        calendar_service: Google Calendar service instance.
-    Returns:
-        existing_tasks (dict): a dictionary mapping task IDs to their events.
-        existing_travel (set): a set of (start_time, end_time) tuples for travel events
-        existing_rest (set): a set of (start_time, end_time) tuples for screen-free events
-    """
-    time_min = datetime.now(timezone.utc).isoformat()  # Fetch from current time onwards
-    events_result = calendar_service.events().list(
-        calendarId='primary',
-        timeMin=time_min,
-        singleEvents=True,
-        orderBy='startTime'
-    ).execute()
-
-    events = events_result.get('items', [])
-    existing_tasks = {}
-    existing_meetings = set()
-    existing_travel = {} # store existing travel time to prevent duplicates being created
-    existing_rest = {} # store existing screen-free time to prevent duplicate events being created
-
-    for event in events:
-        event_id = event.get('id', '')
-        description = event.get('description', '')
-        event_summary = event.get('summary', '').lower()
-        start_time, end_time = parse_event_datetime(event)
-
-        # Track existing meetings by event id
-        existing_meetings.add(event_id)
-        # Track previous scheduled tasks
-        task_id = None
-        if 'Task ID:' in description:
-            # Extract Task ID
-            task_id = description.split('Task ID:')[-1].strip()
-        if task_id:
-            existing_tasks[task_id] = event
-
-        # Track travel events
-        #elif 'travel for' in event_summary:
-            #use elif statement so that events are only classed as one of the following: task, travel time or screen free time. Much more efficient.
-            #existing_travel[event_id] = (event_id, start_time, end_time)
-
-        # Track screen-free events
-        elif 'screen-free time' in event_summary:
-            parent_event_id = None
-            if 'Parent Meeting ID:' in event.get('description', ''):
-                parent_event_id = event.get('description', '').split('Parent Meeting ID:')[-1].strip()
-
-            if parent_event_id:
-                existing_rest[parent_event_id] = (event_id, start_time, end_time)
-    return existing_tasks, existing_meetings, existing_travel, existing_rest
-
-def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
+def manage_calendar_events(calendar_service, scheduled_tasks, existing_tasks):
     """
     Dynamically manage events in Google Calendar based on scheduled tasks.
     Parameter(s):
@@ -1303,10 +1254,6 @@ def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
         scheduled_tasks (list): list of scheduled tasks with their date, start and end times.
         parsed_tasks (list): list of work/personal tasks parsed from Todoist 
     """
-    # Fetch existing events from Google Calendar
-    print("Fetching existing events...")
-    existing_events = fetch_existing_events(calendar_service)
-
     for task in scheduled_tasks:
         task_name = task["task_name"]
         start_time = task["start_time"]
@@ -1323,9 +1270,9 @@ def manage_calendar_events(calendar_service, scheduled_tasks, parsed_tasks):
         labels = matching_task["labels"]
 
         # Check if the task already exists in the calendar
-        if task_id in existing_events:
+        if task_id in existing_tasks:
             # Existing event found—check if times have changed
-            existing_event = existing_events[task_id]
+            existing_event = existing_tasks[task_id]
             existing_start = parser.isoparse(existing_event['start']['dateTime'])
             existing_end = parser.isoparse(existing_event['end']['dateTime'])
 
@@ -1383,31 +1330,53 @@ if __name__ == "__main__":
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
         # Fetch calendar events and occupied slots from Google Calendar
-        calendar_events, occupied_slots = fetch_calendar_events(calendar_service)
+        meetings, tasks, travel_times, screen_free_times, occupied_slots = fetch_calendar_events(calendar_service, time_min=None, time_max=None)
 
-        if not calendar_events:
+        if not meetings and not travel_times and not screen_free_times:
             print("No upcoming events found.")
         
-        # Fetch existing travel and screen-free time events to prevent duplicates
-        existing_tasks, existing_meetings, existing_travel, existing_rest = fetch_existing_events(calendar_service)
+        # Debugging: Print to verify event filtering is functional.
+        print("\n📅 Meetings from Calendar Events:")
+        for meeting_id, meeting_data in meetings.items():
+            start_time, end_time = parse_event_datetime(meeting_data)
+            print(f"Meeting '{meeting_data.get('summary', 'Unnamed Meeting')}' from {start_time} to {end_time}")
 
-        # Debugging: Print occupied slots to verify meetings are being captured
-        print("\nOccupied Slots from Calendar Events:")
-        for start_time, end_time in occupied_slots:
-            print(f"Meeting from {start_time} to {end_time}")
+        print("\nExisting tasks:")
+        for task_id, event in tasks.items():
+            start_time, end_time = parse_event_datetime(event)
+            print(f"Task (ID: {task_id}) from {start_time} to {end_time}")
 
         print("\n🚗 Existing Travel Events:")
-        for event_id, (stored_event_id, start_time, end_time) in existing_travel.items():
-            print(f"Travel (Event ID: {stored_event_id}) from {start_time} to {end_time}")
-
+        for travel_key, event in travel_times.items():
+            if isinstance(event, tuple) and len(event) == 3:
+                event_id, start_time, end_time = event
+                print(f"Travel Event (ID: {event_id}) from {start_time} to {end_time}")
+            else:
+                print(f"Skipping invalid travel event entry: {travel_key} → {event}")
+        
         print("\n🕒 Existing Screen-Free Events:")
-        for event_id, (stored_event_id, start_time, end_time) in existing_rest.items():
-            print(f"Screen-free time (Event ID: {stored_event_id}) from {start_time} to {end_time}")
+        for event_id, value in screen_free_times.items():
+            if isinstance(value, tuple) and len(value) == 3:
+                stored_event_id, start_time, end_time = value  # ✅ Unpack correctly
+                print(f"Screen-Free Time (Event ID: {stored_event_id}) from {start_time} to {end_time}")
+            else:
+                print(f"Skipping invalid screen-free event entry: {event_id} → {value}")
+
+        print("\n⏳ Fully Occupied Slots (Meetings, Travel, Screen-Free Only):")
+        for start_time, end_time in occupied_slots:
+            print(f"Blocked from {start_time} to {end_time}")
 
         # Handle meetings and add travel/rest time
-        for event in calendar_events:
-            location = event.get('location', None)
-            handle_meeting_with_location(calendar_service, event, existing_travel, existing_rest, location=location, occupied_slots=occupied_slots)
+        for meeting_id, meeting_data in meetings.items():
+            location = meeting_data.get('location', None)
+            handle_meeting_with_location(
+                calendar_service, 
+                meeting_data, 
+                travel_times, 
+                screen_free_times, 
+                location=location, 
+                occupied_slots=occupied_slots
+            )
 
         # Merge overlapping occupied slots before scheduling tasks
         occupied_slots = merge_overlapping_intervals(occupied_slots)
@@ -1415,6 +1384,7 @@ if __name__ == "__main__":
         # Calculate task scores and sort tasks by priority
         scored_tasks = [(task, calculate_task_score(task)) for task in parsed_tasks]
         scored_tasks = sorted(scored_tasks, key=lambda x: x[1], reverse=True)
+
         print("\nPrioritised Tasks:")
         for task, score in scored_tasks:
             print(f"{task['name']}, Score: {score:.2f}")
@@ -1428,23 +1398,25 @@ if __name__ == "__main__":
 
             timeslots = get_available_timeslots(
                 energy_profile,
-                calendar_events,
+                occupied_slots,
                 task_type,
                 task_energy_level,
                 task_deadline,
             )
-            available_timeslots[task['name']] = timeslots
+            available_timeslots.update(timeslots)
 
         # Schedule tasks using the greedy algorithm
         log_message("INFO", "Scheduling Tasks")
         scheduled_tasks = schedule_tasks(
-            [task for task, _ in scored_tasks], available_timeslots, occupied_slots, existing_tasks
+            [task for task, _ in scored_tasks],
+            available_timeslots, 
+            occupied_slots, 
+            tasks
         )
-
         # Merge consecutive scheduled tasks into larger slots
         merged_scheduled_tasks = merge_scheduled_tasks(scheduled_tasks)
 
-        # Display the merged scheduled tasks
+        # Display the merged scheduled tasks - Debug print
         print("\nScheduled Tasks:")
         for task in merged_scheduled_tasks:
             log_message("INFO",f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}")
@@ -1470,7 +1442,8 @@ if __name__ == "__main__":
                 task_id = None  # Fallback if no match is found
 
         # Schedule the task in Google Calendar with metadata
-        manage_calendar_events(calendar_service, merged_scheduled_tasks, parsed_tasks)
+        existing_tasks = tasks
+        #manage_calendar_events(calendar_service, scheduled_tasks, existing_tasks)
         code_end = time.time()
         code_time = code_end - code_start
         print(f"\nScheduling took {code_time:.2f} seconds to complete")
