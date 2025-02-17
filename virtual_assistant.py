@@ -1046,6 +1046,11 @@ def get_available_timeslots(energy_profile, occupied_slots, task_type, task_ener
         if available_slots:
             available_timeslots[day] = available_slots
 
+    # 🔍 Debug Print: Check if dictionary structure is correct
+    print(f"\n🔍 DEBUG: Raw Available Timeslots Dictionary → {task_name}, {task_id}")
+    for day, slots in available_timeslots.items():
+        print(f"  {day}: {slots}")
+
     return available_timeslots
 
 def print_suitable_timeslots(energy_profile, occupied_slots, task_type, task_energy_level, task_deadline):
@@ -1065,8 +1070,32 @@ def print_suitable_timeslots(energy_profile, occupied_slots, task_type, task_ene
         for start_time, end_time in slots:
             print(f"  From {start_time} to {end_time}")
 
+def merge_available_slots(slots):
+    """
+    Merges consecutive timeslots if there is no gap between them.
+    Args:
+        slots (list): A list of (start_time, end_time) tuples.
+    Returns:
+        list: A merged list of available time slots.
+    """
+    if not slots:
+        return []
+
+    slots.sort()  # Ensure slots are sorted by start time
+    merged_slots = [slots[0]]
+
+    for current_start, current_end in slots[1:]:
+        last_start, last_end = merged_slots[-1]
+
+        if current_start == last_end:  # If consecutive, merge
+            merged_slots[-1] = (last_start, current_end)
+        else:
+            merged_slots.append((current_start, current_end))
+
+    return merged_slots
+
 # -- Task scheduling logic. Using Greedy Algorithm
-def schedule_tasks(parsed_tasks, available_timeslots, occupied_slots, existing_tasks):
+def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
     """
     Schedules tasks using a greedy approach, ensuring tasks are scheduled into available timeslots
     without overlap with occupied slots.
@@ -1080,59 +1109,96 @@ def schedule_tasks(parsed_tasks, available_timeslots, occupied_slots, existing_t
     scheduled_tasks = []
     local_tz = pytz.timezone('Europe/London')
 
-    for task in parsed_tasks:
+    for task in tasks:
         task_name = task["name"]
         task_id = task["id"]
         task_type = task["task_type"]
         task_energy_level = task["energy_level"]
         task_duration = timedelta(minutes=task["estimated_time"])
 
-        # If Task Already Exists, Use Existing Time
-        if task_id in existing_tasks:
-            existing_event = existing_tasks[task_id]
-            start_time, end_time = parse_event_datetime(existing_event)
-            scheduled_tasks.append({
-                "task_id": task_id,
-                "task_name": task_name,
-                "start_time": start_time,
-                "end_time": end_time
-            })
-            log_message("INFO", f"Task '{task_name}' already scheduled from {start_time} to {end_time}. Skipping rescheduling.")
+        print(f"\n🔍 DEBUG: Attempting to schedule task → {task_name}, ID: {task_id}")
+        #if task_id in existing_tasks:
+            #existing_event = existing_tasks[task_id]
+            #start_time, end_time = parse_event_datetime(existing_event)
+            #scheduled_tasks.append({
+                #"task_id": task_id,
+                #"task_name": task_name,
+                #"start_time": start_time,
+                #"end_time": end_time
+            #})
+            #log_message("INFO", f"Task '{task_name}' already scheduled from {start_time} to {end_time}. Skipping rescheduling.")
+            #continue
+
+        # Skip if no available timeslots exist
+        if task_id not in available_timeslots:
+            print(f"❌ No available timeslots found for task '{task_name}', ID: {task_id}")
             continue
 
-        # Try to Schedule Task in Available Slots
-        scheduled = False
-        for day, slots in available_timeslots.items():
-            for slot_start, slot_end in slots:
-                if slot_end - slot_start >= task_duration:
+        task_slots = available_timeslots[task_id]
+        print(f"✅ Available Timeslots for {task_name}: {task_slots}")
+
+        remaining_time = task_duration
+        scheduled_parts = []
+
+        for day, slots in task_slots.items():
+            # Sort slots in ascending order before processing
+            sorted_slots = sorted(slots, key=lambda x: x[0])
+
+            for slot_start, slot_end in sorted_slots:
+                available_time = slot_end - slot_start
+
+                if available_time <= timedelta(minutes=0):
+                    continue  # Skip invalid slots
+
+                # 🚨 Check if the slot conflicts with occupied slots
+                conflicts = any(
+                    occupied_start < slot_end and occupied_end > slot_start
+                    for occupied_start, occupied_end in occupied_slots
+                )
+
+                if conflicts:
+                    print(f"❌ Conflict detected! Skipping slot {slot_start} → {slot_end} for {task_name}")
+                    continue  # Skip this slot
+
+                # ✅ If a single slot fits the entire task, schedule it
+                if available_time >= remaining_time:
                     task_start = slot_start
-                    task_end = task_start + task_duration
+                    task_end = slot_start + remaining_time
+                    scheduled_parts.append((task_start, task_end))
+                    occupied_slots.append((task_start, task_end))  # ✅ Mark as occupied
+                    print(f"  ✅ Scheduling {task_name} in one slot from {task_start} to {task_end}")
+                    remaining_time = timedelta(minutes=0)
+                    break  # Task fully scheduled
 
-                    #Ensure Task Doesn't Overlap Occupied Slots
-                    overlaps = any(
-                        occupied_start < task_end and occupied_end > task_start
-                        for occupied_start, occupied_end in occupied_slots
-                    )
-                    if overlaps:
-                        continue  # skip if overlap
+                else:  # 🛠️ Need to split task across multiple slots
+                    task_start = slot_start
+                    task_end = slot_end
+                    scheduled_parts.append((task_start, task_end))
+                    occupied_slots.append((task_start, task_end))  # ✅ Mark as occupied
+                    remaining_time -= available_time
+                    print(f"  🔀 Splitting {task_name}, scheduling part from {task_start} to {task_end}")
 
-                    # Book the Task and Update Occupied Slots
-                    scheduled_tasks.append({
-                        "task_id": task_id,
-                        "task_name": task_name,
-                        "start_time": task_start,
-                        "end_time": task_end
-                    })
-                    occupied_slots.append((task_start, task_end))
-                    log_message("INFO", f"Scheduled task '{task_name}' from {task_start} to {task_end}.")
-                    scheduled = True
-                    break 
+            if remaining_time == timedelta(minutes=0):
+                break  # Task fully scheduled
 
-            if scheduled:
-                break
+        # ✅ Prevent duplicate scheduling by adding each scheduled part only once
+        for part_start, part_end in scheduled_parts:
+            if not any(
+                task["start_time"] == part_start and task["end_time"] == part_end
+                for task in scheduled_tasks
+            ):
+                scheduled_tasks.append({
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "start_time": part_start,
+                    "end_time": part_end
+                })
+        
+        if scheduled_parts:
+            print(f"✅ Task {task_name} scheduled in {len(scheduled_parts)} part(s).")
 
-        if not scheduled:
-            log_message("WARNING", f"No available timeslot found for task '{task_name}'. Check task deadline and/or consider altering priorities")
+        if remaining_time > timedelta(minutes=0):
+            print(f"⚠️ Task {task_name} could not be fully scheduled. Remaining time: {remaining_time}")
 
     return scheduled_tasks
 
@@ -1147,10 +1213,11 @@ def merge_scheduled_tasks(scheduled_tasks):
     if not scheduled_tasks:
         return []
 
-    # Sort tasks by task_name, day (as start_time.date() ), and start_time for proper merging
     scheduled_tasks.sort(key=lambda x: (x["task_name"], x["start_time"].date(), x["start_time"]))
     merged_tasks = []
+    
     current_task = scheduled_tasks[0]
+    
     for next_task in scheduled_tasks[1:]:
         # Check if the next task is consecutive and belongs to the same task and day
         if (
@@ -1161,12 +1228,14 @@ def merge_scheduled_tasks(scheduled_tasks):
             # Extend the current task's end_time
             current_task["end_time"] = next_task["end_time"]
         else:
-            # Add the current task to merged_tasks and start a new current_task
+            # Add the current task to merged_tasks and mark occupied
             merged_tasks.append(current_task)
+            occupied_slots.append((current_task["start_time"], current_task["end_time"])) 
             current_task = next_task
 
     # Add the last task
     merged_tasks.append(current_task)
+    occupied_slots.append((current_task["start_time"], current_task["end_time"])) 
 
     return merged_tasks
 
@@ -1313,45 +1382,45 @@ def manage_calendar_events(calendar_service, scheduled_tasks, existing_tasks):
 if __name__ == "__main__":
     code_start = time.time()
     try:
-        # Refresh token if needed
+        # 🔄 Refresh token if needed
         creds = refresh_token_if_needed()
         if creds:
             log_message("INFO", "Token refreshed successfully.")
         else:
             log_message("ERROR", "Authentication required!")
 
-        # Authenticate services
+        # ✅ Authenticate services
         sheets_service, calendar_service = authenticate_google_services()
 
-        # Fetch weather data and determine if adjustments to energy levels are required
+        # 🌦️ Fetch weather data and determine if adjustments to energy levels are required
         weather_data = get_weather()
         hot_weather = weather_analysis(weather_data)
 
-        # Fetch and parse tasks from Todoist
+        # 📝 Fetch and parse tasks from Todoist
         parsed_tasks = parse_personal_and_work_tasks()
         if not parsed_tasks:
             raise ValueError("No tasks found. Ensure tasks are correctly labeled and accessible.")
 
         print(f"Parsed {len(parsed_tasks)} tasks.")
 
-        # Fetch working hours and energy levels from Google Sheets
+        # 🕰️ Fetch working hours and energy levels from Google Sheets
         energy_profile = fetch_working_hours_and_energy_levels(sheets_service, weather_analysis=hot_weather)
         if not energy_profile:
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
-        # Fetch calendar events and occupied slots from Google Calendar
-        meetings, tasks, travel_times, screen_free_times, occupied_slots = fetch_calendar_events(calendar_service, time_min=None, time_max=None)
+        # 📅 Fetch calendar events and occupied slots from Google Calendar
+        meetings, tasks, travel_times, screen_free_times, occupied_slots = fetch_calendar_events(calendar_service)
 
         if not meetings and not travel_times and not screen_free_times:
             print("No upcoming events found.")
-        
-        # Debugging: Print to verify event filtering is functional.
+
+        # 🔍 Debugging: Print to verify event filtering is functional.
         print("\n📅 Meetings from Calendar Events:")
         for meeting_id, meeting_data in meetings.items():
             start_time, end_time = parse_event_datetime(meeting_data)
             print(f"Meeting '{meeting_data.get('summary', 'Unnamed Meeting')}' from {start_time} to {end_time}")
 
-        print("\n Existing tasks:")
+        print("\n📝 Existing Tasks:")
         for task_id, event in tasks.items():
             start_time, end_time = parse_event_datetime(event)
             print(f"Task (ID: {task_id}) from {start_time} to {end_time}")
@@ -1363,7 +1432,7 @@ if __name__ == "__main__":
                 print(f"Travel Event (ID: {event_id}) from {start_time} to {end_time}")
             else:
                 print(f"Skipping invalid travel event entry: {travel_key} → {event}")
-        
+
         print("\n🕒 Existing Screen-Free Events:")
         for event_id, value in screen_free_times.items():
             if isinstance(value, tuple) and len(value) == 3:
@@ -1376,32 +1445,34 @@ if __name__ == "__main__":
         for start_time, end_time in occupied_slots:
             print(f"Blocked from {start_time} to {end_time}")
 
-        # Handle meetings and add travel/rest time
+        # 🛠️ Handle meetings and add travel/rest time
         for meeting_id, meeting_data in meetings.items():
             location = meeting_data.get('location', None)
             handle_meeting_with_location(
-                calendar_service, 
-                meeting_data, 
-                travel_times, 
-                screen_free_times, 
-                location=location, 
+                calendar_service,
+                meeting_data,
+                travel_times,
+                screen_free_times,
+                location=location,
                 occupied_slots=occupied_slots
             )
 
-        # Merge overlapping occupied slots before scheduling tasks
+        # 🔄 Merge overlapping occupied slots before scheduling tasks
         occupied_slots = merge_overlapping_intervals(occupied_slots)
 
-        # Calculate task scores and sort tasks by priority
+        # 🔢 Calculate task scores and sort tasks by priority
         scored_tasks = [(task, calculate_task_score(task)) for task in parsed_tasks]
-        scored_tasks = sorted(scored_tasks, key=lambda x: x[1], reverse=True)
+        scored_tasks.sort(key=lambda x: x[1], reverse=True)
 
-        print("\nPrioritised Tasks:")
+        print("\n🏆 Prioritized Tasks:")
         for task, score in scored_tasks:
             print(f"{task['name']}, Score: {score:.2f}")
 
-        # Generate and collect available time slots for each task
+        # 📆 Generate and collect available time slots for each task
         available_timeslots = {}
         for task, _ in scored_tasks:
+            task_name = task["name"]
+            task_id = task["id"]
             task_type = task["task_type"]
             task_energy_level = task["energy_level"]
             task_deadline = task["deadline"]
@@ -1413,31 +1484,37 @@ if __name__ == "__main__":
                 task_energy_level,
                 task_deadline,
             )
-            available_timeslots.update(timeslots)
 
-        # Schedule tasks using the greedy algorithm
+            if timeslots:  # ✅ Ensure timeslots exist before adding to dictionary
+                available_timeslots[task_id] = timeslots
+            else:
+                print(f"❌ No available timeslots found for task '{task_name}', ID: {task_id}")
+
+        # 📌 Schedule tasks using the greedy algorithm
         log_message("INFO", "Scheduling Tasks")
+
         scheduled_tasks = schedule_tasks(
             [task for task, _ in scored_tasks],
-            available_timeslots, 
-            occupied_slots, 
+            available_timeslots,
+            occupied_slots,
             tasks
         )
-        # Merge consecutive scheduled tasks into larger slots
+
+        # 🔄 Merge consecutive scheduled tasks into larger slots
         merged_scheduled_tasks = merge_scheduled_tasks(scheduled_tasks)
 
-        # Display the merged scheduled tasks - Debug print
-        print("\nScheduled Tasks:")
+        # 📝 Display the merged scheduled tasks
+        print("\n📌 Scheduled Tasks:")
         for task in merged_scheduled_tasks:
-            log_message("INFO",f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}")
+            log_message("INFO", f"Task '{task['task_name']}' scheduled from {task['start_time']} to {task['end_time']}")
 
-        # Add merged scheduled tasks to Google Calendar
+        # ✅ Add merged scheduled tasks to Google Calendar
         for scheduled_task in merged_scheduled_tasks:
             task_name = scheduled_task["task_name"]
             start_time = scheduled_task["start_time"]
             end_time = scheduled_task["end_time"]
 
-            # Fetch task details including labels and ID
+            # 🏷️ Fetch task details including labels and ID
             matching_task = next(
                 (task for task in parsed_tasks if task["name"] == task_name),
                 None
@@ -1446,17 +1523,19 @@ if __name__ == "__main__":
             # Extract labels and task ID if available
             if matching_task:
                 labels = matching_task["labels"]
-                task_id = matching_task["id"]  # Pass Task ID
+                task_id = matching_task["id"]  # ✅ Pass Task ID
             else:
                 labels = []
                 task_id = None  # Fallback if no match is found
 
-        # Schedule the task in Google Calendar with metadata
+        # 📅 Schedule the task in Google Calendar with metadata
         existing_tasks = tasks
-        manage_calendar_events(calendar_service, scheduled_tasks, existing_tasks)
+        manage_calendar_events(calendar_service, merged_scheduled_tasks, existing_tasks)
+
+        # ✅ Execution Complete
         code_end = time.time()
         code_time = code_end - code_start
-        print(f"\nScheduling took {code_time:.2f} seconds to complete")
-            
+        print(f"\n✅ Scheduling took {code_time:.2f} seconds to complete")
+
     except Exception as e:
-        print(f"An error occurred during execution: {e}")
+        print(f"❌ An error occurred during execution: {e}")
