@@ -1099,6 +1099,63 @@ def merge_available_slots(slots):
 
     return merged_slots
 
+def insert_breaks(occupied_slots):
+    """
+    Inserts breaks (morning, lunch, afternoon) while ensuring lunch is taken in a single block.
+    """
+    local_tz = pytz.timezone('Europe/London')
+
+    # Define Fixed Break Windows
+    # Morning break between 9.30am and 10am
+    morning_break_window = (datetime.now().replace(hour=9, minute=30, second=0, microsecond=0, tzinfo=local_tz),
+                            datetime.now().replace(hour=10, minute=0, second=0, microsecond=0, tzinfo=local_tz))
+    # Lunch between 12 and 2pm
+    lunch_window = (datetime.now().replace(hour=12, minute=0, second=0, microsecond=0, tzinfo=local_tz),
+                    datetime.now().replace(hour=14, minute=0, second=0, microsecond=0, tzinfo=local_tz))
+    # Afternoon break between 3.30pm and 4pm
+    afternoon_break_window = (datetime.now().replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=local_tz),
+                              datetime.now().replace(hour=16, minute=0, second=0, microsecond=0, tzinfo=local_tz))
+
+    # Insert Morning & Afternoon Breaks (15 min)
+    breaks_to_schedule = [
+        (morning_break_window[0], morning_break_window[0] + timedelta(minutes=15)),
+        (afternoon_break_window[0], afternoon_break_window[0] + timedelta(minutes=15))
+    ]
+
+    # Determine the largest available lunch slot within 12:00 - 14:00
+    available_lunch_slots = []
+    lunch_start, lunch_end = lunch_window
+    current_start = lunch_start
+
+    while current_start + timedelta(minutes=30) <= lunch_end:
+        potential_end = min(current_start + timedelta(minutes=60), lunch_end)
+
+        # Ensure no conflicts with occupied slots
+        conflicts = any(
+            occupied_start < potential_end and occupied_end > current_start
+            for occupied_start, occupied_end in occupied_slots
+        )
+
+        if not conflicts:
+            available_lunch_slots.append((current_start, potential_end))
+
+        # Move to the next possible slot
+        current_start += timedelta(minutes=15)
+
+    # Select the best lunch duration available (preferring 60 min, then 45, then 30)
+    if available_lunch_slots:
+        best_lunch_slot = max(available_lunch_slots, key=lambda x: x[1] - x[0])  # Pick longest slot
+    else:
+        print("Warning: No available lunch slot found!")
+        best_lunch_slot = (lunch_start, lunch_start + timedelta(minutes=30))  # Force minimum 30 min
+
+    breaks_to_schedule.append(best_lunch_slot)  # Add lunch as a single block
+
+    # Merge breaks into occupied slots
+    occupied_slots.extend(breaks_to_schedule)
+
+    return occupied_slots
+
 # -- Task scheduling logic. Using Greedy Algorithm
 def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
     """
