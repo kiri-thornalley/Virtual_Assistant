@@ -1028,25 +1028,21 @@ def get_available_timeslots(energy_profile, occupied_slots, task_type, task_ener
 
                 # Check Energy Level & Task Type
                 if slot_energy_level >= task_energy_level_int and slot["task_type"] == task_type:
+                    # Skip chunks less than 30 mins if high-energy task
+                    if task_energy_level_int == 3 and slot_duration < timedelta(minutes=30):
+                        continue 
+
                     if slot_duration >= timedelta(minutes=task["estimated_time"]):
                         available_slots.append((free_start, free_end))
                     else:
-                        # Handle small slots in 15-minute chunks for low/medium energy tasks, 30 minute chunks for high-energy tasks
-                        if task_energy_level_int != 3:
-                            current_chunk_start = free_start
-                            chunks = []
-                            while current_chunk_start < free_end:
-                                current_chunk_end = min(current_chunk_start + timedelta(minutes=15), free_end)
-                                chunks.append((current_chunk_start, current_chunk_end))
-                                current_chunk_start = current_chunk_end
-                        else:
-                            current_chunk_start = free_start
-                            chunks = []
-                            while current_chunk_start < free_end:
-                                current_chunk_end = min(current_chunk_start + timedelta(minutes=30), free_end)
-                                chunks.append((current_chunk_start, current_chunk_end))
-                                current_chunk_start = current_chunk_end
-                        # Merge consecutive chunks into a larger slot
+                        # Handle small slots in 15-minute chunks
+                        current_chunk_start = free_start
+                        chunks = []
+                        while current_chunk_start < free_end:
+                            current_chunk_end = min(current_chunk_start + timedelta(minutes=15), free_end)
+                            chunks.append((current_chunk_start, current_chunk_end))
+                            current_chunk_start = current_chunk_end
+                    # Merge consecutive chunks into a larger slot
                         if chunks:
                             available_slots.append((chunks[0][0], chunks[-1][1]))
 
