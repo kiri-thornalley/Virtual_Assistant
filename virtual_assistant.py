@@ -120,10 +120,10 @@ endpoint = '/point/hourly' # Specify the endpoint for the type of weather data y
 
 # Build the full URL includeLocationName=TRUE means json response also contains the name of the weather station it is pulling data from. 
 # If recently changed, also print full response in def get_weather to confirm identity of weather station
-url = f"{base_url}{endpoint}?includeLocationName=TRUE&latitude={latitude}&longitude={longitude}"
+API_URL = f"{base_url}{endpoint}?includeLocationName=TRUE&latitude={latitude}&longitude={longitude}"
 
 # Set up headers for the request
-headers = {
+API_HEADERS = {
     'Accept': 'application/json',
     'apikey': api_key,
     'User-Agent': 'Python/requests'
@@ -155,7 +155,7 @@ def get_weather():
     print ("Fetching new weather data from Met Office API. Please wait...")
    
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(API_URL, headers=API_HEADERS)
         response.raise_for_status()  # Raise an error for bad status codes
         # Parse the JSON response
         data = response.json()
@@ -190,7 +190,7 @@ def get_weather():
     except requests.exceptions.HTTPError as http_err:
         print(f"HTTP error occurred: {http_err}")
     except requests.exceptions.RequestException as err:
-        print(f"Other error occurred: {err}")
+        print(f"API error occured: {err}")
     return [] #Return empty list if there is an error
 
 #search weather_data to confirm temperature is/isn't >22c in the next 48 hours.
@@ -214,6 +214,8 @@ def weather_analysis(weather_data, threshold_temp=22):
     return False  # Return False if no entry exceeds the threshold
 
 # -- Get Data - Tasks from Todoist, Energy levels and working hours from Google Sheets
+
+
 api_key = os.getenv("TODOIST_API_KEY")
 if not api_key:
     raise ValueError("TODOIST_API_KEY not found in environment variables. Please check your .env file.")
@@ -317,61 +319,44 @@ def parse_personal_and_work_tasks():
 
         def parse_due_date_or_datetime(task_due):
             """
-            Parses the due date or datetime for a task. Handles both full dates (whole-day tasks) and datetime objects.
-            Ensures all datetimes are timezone-aware.
-            Parameter(s):
-                task_due:
+            Parses a due date or datetime for a task and ensures timezone awareness.
+            - If `task_due.datetime` is provided, it is converted to a timezone-aware datetime.
+            - If `task_due.date` (without time) is provided, it is set to 23:59:59.
+            - If the input is missing or invalid, returns None.
+            
+            Parameters:
+                task_due (object): Task due date object, which may have `datetime` or `date` attributes.
+            
             Returns:
-                deadline (datetime): returns deadline if task has both a due date and time
-                task_end_of_day (datetime): returns task_end_of_day if task only has a due date, and no set time. 23:59:59 is then assigned automatically
+                datetime or None: A timezone-aware datetime object, or None if parsing fails.
             """
             local_tz = pytz.timezone('Europe/London')
 
             if not task_due:
                 return None  # Handle missing due field gracefully
 
-            # Task with datetime
+            # Handle tasks with a full datetime
             if hasattr(task_due, 'datetime') and task_due.datetime:
-                deadline = parse_datetime(task_due.datetime)  # Call fixed parse_datetime
-                return deadline
+                try:
+                    dt = datetime.fromisoformat(task_due.datetime)  # Convert from string
+                    return dt.astimezone(local_tz) if dt.tzinfo else local_tz.localize(dt)
+                except ValueError:
+                    print(f"Error parsing datetime: {task_due.datetime}")
+                    return None
 
-            # Task with date only
+            # Handle tasks with only a date (without a time)
             if hasattr(task_due, 'date') and task_due.date:
-                if isinstance(task_due.date, str):
-                    task_date = datetime.strptime(task_due.date, '%Y-%m-%d')  # Convert to datetime
-                else:
-                    task_date = task_due.date
+                try:
+                    task_date = datetime.strptime(task_due.date, '%Y-%m-%d') if isinstance(task_due.date, str) else task_due.date
+                    return local_tz.localize(task_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+                except ValueError:
+                    print(f"Error parsing date: {task_due.date}")
+                    return None
 
-                # Localize date to Europe/London
-                if task_date.tzinfo is None:
-                    task_date = local_tz.localize(task_date)
-
-                # Assign 23:59:59 as the end of the day
-                task_end_of_day = task_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-                return task_end_of_day
-
-            return None
-
-        def parse_datetime(date_string):
-            """
-            Converts a datetime string into a timezone-aware datetime object.
-            Assumes the date string is in UTC if no timezone information is present.
-            """
-            try:
-                # Try parsing as a datetime with timezone info
-                dt = datetime.fromisoformat(date_string)
-                local_tz = pytz.timezone('Europe/London')
-                if dt.tzinfo is None:  # Localize naive datetime
-                    dt = local_tz.localize(dt)
-                else:  # Convert aware datetime to local timezone
-                    dt = dt.astimezone(local_tz)
-                return dt
-            except ValueError:
-                print(f"Error parsing datetime: {date_string}")
-                return None
+            return None  # If neither `datetime` nor `date` are available
 
         for task in tasks:
-            # Only process tasks with 'personal' or 'work' labels
+        # Only process tasks with 'personal' or 'work' labels
             if "personal" in task.labels or "work" in task.labels:
                 # Extract task details
                 task_id = task.id
@@ -411,7 +396,7 @@ def parse_personal_and_work_tasks():
                 })
 
         return parsed_tasks
-  
+
     except Exception as e:
         print(f"An error occurred while parsing tasks: {e}")
         return []
@@ -1387,7 +1372,7 @@ def manage_calendar_events(calendar_service, scheduled_tasks, existing_tasks):
         parsed_tasks (list): list of work/personal tasks parsed from Todoist 
     """
     for task in scheduled_tasks:
-            task_id = task["task_id"]
+            task_id = task.get("task_id")
             start_time = task["start_time"]
             end_time = task["end_time"]
 
