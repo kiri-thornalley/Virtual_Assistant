@@ -549,9 +549,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             continue
 
         # Meetings
-        if ('scheduled by task scheduler' not in description and 'supervision' not in description and 'teaching' not in description
-            and 'travel' not in event_summary and 'screen-free time' not in event_summary and 'supervision' not in event_summary and 'teaching' not in event_summary):
-            
+        if ('meeting' in event_summary or 'meeting' in description):
             meetings[event_id] = event
             occupied_slots.append((start_time, end_time))
 
@@ -575,7 +573,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             continue 
 
         # Categorise Tasks
-        if "scheduled by task scheduler" in description.lower():
+        if "scheduled by task scheduler" in description:
             task_id_match = re.search(r"task id:\s*(\S+)", description)
             if task_id_match:
                 task_id = task_id_match.group(1).strip()
@@ -583,7 +581,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             continue
 
         # Categorise Travel Time
-        if "travel" in event_summary.lower():
+        if "travel" in event_summary:
             parent_event_id_match = re.search(r"parent meeting id:\s*(\S+)", description)
             parent_event_id = parent_event_id_match.group(1).strip() if parent_event_id_match else None
                 
@@ -602,7 +600,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
                     continue 
 
         # Categorise Screen-Free Time
-        if "screen-free time" in event_summary.lower():
+        if "screen-free time" in event_summary:
             parent_event_id_match = re.search(r"parent meeting id:\s*(\S+)", description)
             parent_event_id = parent_event_id_match.group(1).strip() if parent_event_id_match else None
 
