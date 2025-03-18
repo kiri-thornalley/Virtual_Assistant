@@ -568,11 +568,10 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
         if ("teaching" in description or "teaching" in event_summary):
             teaching_supervision[event_id] = event
             occupied_slots.append((start_time, end_time))
-            print(f"Teaching '{event.get('summary', 'Unnamed')}' from {start_time} to {end_time}")
+
         elif ("supervision" in description or "supervision" in event_summary):
             teaching_supervision[event_id] = event
             occupied_slots.append((start_time, end_time))
-            print(f"Supervision '{event.get('summary', 'Unnamed')}' from {start_time} to {end_time}")
             continue 
 
         # Categorise Tasks
