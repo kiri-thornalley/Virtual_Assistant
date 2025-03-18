@@ -269,7 +269,7 @@ def parse_personal_and_work_tasks():
             Returns:
                 energy_level (literal): ['high', 'medium', 'low']
                 impact (literal): ['very high', 'high', 'medium', 'low']
-                classification (literal): ['email', 'admin', 'writing', 'data analysis', 'reading & searching', 'thinking & planning', 'preparing & giving talks']
+                classification (literal): ['email', 'admin', 'writing', 'data analysis', 'reading & searching', 'thinking & planning', 'preparing & giving talks', 'teaching & supervision']
                 task_type (literal): ['Work', 'Personal']
             """
             energy_level = None
@@ -307,6 +307,8 @@ def parse_personal_and_work_tasks():
                     classification = "thinking & planning"
                 elif label == "giving_talks":
                     classification = "preparing & giving talks"
+                elif label == "teaching_supervision":
+                    classification = "teaching & supervision"
 
                 if label == "work":
                     task_type = "Work"
@@ -498,6 +500,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
     
     Returns:
         meetings (dict): {meeting_id: event_data}
+        teaching_supervision (dict): {event_id: event_data} 
         tasks (dict): {task_id: event_data}
         travel_times (dict): {meeting_id_before/after: (event_id, start_time, end_time)}
         screen_free_times (dict): {meeting_id: (event_id, start_time, end_time)}
@@ -511,6 +514,7 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
         time_max = (datetime.now(timezone.utc) + timedelta(days=28)).astimezone(local_tz).isoformat()
 
     meetings = {}
+    teaching_supervision = {}
     tasks = {}
     travel_times = {}
     screen_free_times = {}
@@ -545,9 +549,8 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             continue
 
         # Meetings
-        if ('scheduled by task scheduler' not in description and 
-            'travel' not in event_summary and 
-            'screen-free time' not in event_summary):
+        if ('scheduled by task scheduler' not in description and 'supervision' not in description and 'teaching' not in description
+            and 'travel' not in event_summary and 'screen-free time' not in event_summary and 'supervision' not in event_summary and 'teaching' not in event_summary):
             
             meetings[event_id] = event
             occupied_slots.append((start_time, end_time))
@@ -560,6 +563,17 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
 
         if not start_time or not end_time:
             continue
+        
+        # Categorise Teaching and Supervision - most of these events will come via Todoist, others need to be manually inserted into calendar, like meetings.
+        if ("teaching" in description or "teaching" in event_summary):
+            teaching_supervision[event_id] = event
+            occupied_slots.append((start_time, end_time))
+            print(f"Teaching '{event.get('summary', 'Unnamed')}' from {start_time} to {end_time}")
+        elif ("supervision" in description or "supervision" in event_summary):
+            teaching_supervision[event_id] = event
+            occupied_slots.append((start_time, end_time))
+            print(f"Supervision '{event.get('summary', 'Unnamed')}' from {start_time} to {end_time}")
+            continue 
 
         # Categorise Tasks
         if "scheduled by task scheduler" in description.lower():
@@ -596,7 +610,8 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             if parent_event_id:
                 screen_free_times[parent_event_id] = (event_id, start_time, end_time)
                 occupied_slots.append((start_time, end_time))  
-    return meetings, tasks, travel_times, screen_free_times, occupied_slots
+
+    return meetings, teaching_supervision, tasks, travel_times, screen_free_times, occupied_slots
 
 def ensure_datetime(value):
     """Ensure a value is a datetime object and make it timezone-aware with GMT/BST handling."""
@@ -1034,9 +1049,9 @@ def get_available_timeslots(energy_profile, occupied_slots, task_type, task_ener
             available_timeslots[day] = available_slots
 
     # 🔍 Debug Print: Check if dictionary structure is correct
-    print(f"\n🔍 DEBUG: Raw Available Timeslots Dictionary → {task_name}, {task_id}")
-    for day, slots in available_timeslots.items():
-        print(f"  {day}: {slots}")
+    #print(f"\n🔍 DEBUG: Raw Available Timeslots Dictionary → {task_name}, {task_id}")
+    #for day, slots in available_timeslots.items():
+        #print(f"  {day}: {slots}")
 
     return available_timeslots
 
@@ -1103,7 +1118,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
         task_energy_level = task["energy_level"]
         task_duration = timedelta(minutes=task["estimated_time"])
 
-        print(f"\n🔍 DEBUG: Attempting to schedule task → {task_name}, ID: {task_id}")
+        #print(f"\n🔍 DEBUG: Attempting to schedule task → {task_name}, ID: {task_id}")
         #if task_id in existing_tasks:
             #existing_event = existing_tasks[task_id]
             #start_time, end_time = parse_event_datetime(existing_event)
@@ -1122,7 +1137,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
             continue
 
         task_slots = available_timeslots[task_id]
-        print(f"✅ Available Timeslots for {task_name}: {task_slots}")
+        #print(f"✅ Available Timeslots for {task_name}: {task_slots}")
 
         remaining_time = task_duration
         scheduled_parts = []
@@ -1153,7 +1168,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
                     task_end = slot_start + remaining_time
                     scheduled_parts.append((task_start, task_end))
                     occupied_slots.append((task_start, task_end))  # ✅ Mark as occupied
-                    print(f"  ✅ Scheduling {task_name} in one slot from {task_start} to {task_end}")
+                    #print(f"  ✅ Scheduling {task_name} in one slot from {task_start} to {task_end}")
                     remaining_time = timedelta(minutes=0)
                     break  # Task fully scheduled
 
@@ -1163,7 +1178,7 @@ def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
                     scheduled_parts.append((task_start, task_end))
                     occupied_slots.append((task_start, task_end))  # ✅ Mark as occupied
                     remaining_time -= available_time
-                    print(f"  🔀 Splitting {task_name}, scheduling part from {task_start} to {task_end}")
+                    #print(f"  🔀 Splitting {task_name}, scheduling part from {task_start} to {task_end}")
 
             if remaining_time == timedelta(minutes=0):
                 break  # Task fully scheduled
@@ -1396,9 +1411,9 @@ if __name__ == "__main__":
             raise ValueError("No working hours or energy levels found in Google Sheets.")
 
         # 📅 Fetch calendar events and occupied slots from Google Calendar
-        meetings, tasks, travel_times, screen_free_times, occupied_slots = fetch_calendar_events(calendar_service)
+        meetings, teaching_supervision, tasks, travel_times, screen_free_times, occupied_slots = fetch_calendar_events(calendar_service)
 
-        if not meetings and not travel_times and not screen_free_times:
+        if not meetings and not teaching_supervision and not travel_times and not screen_free_times:
             print("No upcoming events found.")
 
         # 🔍 Debugging: Print to verify event filtering is functional.
@@ -1406,6 +1421,11 @@ if __name__ == "__main__":
         for meeting_id, meeting_data in meetings.items():
             start_time, end_time = parse_event_datetime(meeting_data)
             print(f"Meeting '{meeting_data.get('summary', 'Unnamed Meeting')}' from {start_time} to {end_time}")
+
+        print("\n📅 Teaching and Supervision from Calendar Events:")
+        for teaching_id, teaching_data in teaching_supervision.items():
+            start_time, end_time = parse_event_datetime(teaching_data)
+            print(f"Teaching and Supervision '{teaching_data.get('summary', 'Unnamed')}' from {start_time} to {end_time}")
 
         print("\n📝 Existing Tasks:")
         for task_id, event in tasks.items():
