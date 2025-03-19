@@ -1103,11 +1103,11 @@ def insert_breaks(occupied_slots):
     local_tz = pytz.timezone('Europe/London')
 
     # Extract unique dates where work tasks exist
-    unique_dates = sorted(set(datetime.strptime(day, "%Y-%m-%d").date() if isinstance(day, str) else day for task in available_timeslots.values() for day in task.keys()))
+    unique_dates = set(slot[0].date() for slot in occupied_slots)
 
-    breaks_to_schedule = []  # Stores breaks separately for Google Calendar
+    scheduled_breaks = []  # Stores breaks separately for Google Calendar
 
-    def find_flexible_break(start_time, end_time, duration=15):
+    def find_break_slot(start_time, end_time, duration=15):
         """Finds a free slot of exactly `duration` minutes within the given time range."""
         current_start = start_time
 
@@ -1144,10 +1144,10 @@ def insert_breaks(occupied_slots):
         }
 
         # Find and add morning break (15 min, flexible)
-        morning_start, morning_end = find_flexible_break(morning_start, morning_end)
+        morning_start, morning_end = find_break_slot(morning_start, morning_end)
         if morning_start and morning_end:
             occupied_slots.append((morning_start, morning_end))  
-            breaks_to_schedule.append((morning_start, morning_end))  
+            scheduled_breaks.append((morning_start, morning_end))  
 
         # Schedule lunch break (prefers 60 min, accepts 45, and forces 30 if necessary)
         available_lunch_slots = []
@@ -1163,16 +1163,15 @@ def insert_breaks(occupied_slots):
         if available_lunch_slots:
             best_lunch_slot = max(available_lunch_slots, key=lambda x: x[2])  # Pick longest available slot
             occupied_slots.append((best_lunch_slot[0], best_lunch_slot[1]))
-            breaks_to_schedule.append((best_lunch_slot[0], best_lunch_slot[1]))
-        
+            scheduled_breaks.append((best_lunch_slot[0], best_lunch_slot[1]))    
 
         # Find and add afternoon break (15 min, flexible)
-        afternoon_start, afternoon_end = find_flexible_break(afternoon_start, afternoon_end)
+        afternoon_start, afternoon_end = find_break_slot(afternoon_start, afternoon_end)
         if afternoon_start and afternoon_end:
             occupied_slots.append((afternoon_start, afternoon_end))
-            breaks_to_schedule.append((afternoon_start, afternoon_end))
+            scheduled_breaks.append((afternoon_start, afternoon_end))
 
-    return occupied_slots, breaks_to_schedule
+    return occupied_slots, scheduled_breaks
 
 # -- Task scheduling logic. Using Greedy Algorithm
 def schedule_tasks(tasks, available_timeslots, occupied_slots, existing_tasks):
@@ -1609,7 +1608,7 @@ if __name__ == "__main__":
         merged_scheduled_tasks = merge_scheduled_tasks(scheduled_tasks)
 
         # Insert Breaks
-        occupied_slots, breaks_to_schedule = insert_breaks(occupied_slots)
+        occupied_slots, scheduled_breaks = insert_breaks(occupied_slots)
         
         # 📝 Display the merged scheduled tasks
         print("\n📌 Scheduled Tasks:")
@@ -1639,7 +1638,7 @@ if __name__ == "__main__":
         # 📅 Schedule the task in Google Calendar with metadata
         existing_tasks = tasks
         manage_calendar_events(calendar_service, merged_scheduled_tasks, existing_tasks)
-        schedule_breaks(calendar_service, breaks_to_schedule)
+        schedule_breaks(calendar_service, scheduled_breaks)
 
         # ✅ Execution Complete
         code_end = time.time()
