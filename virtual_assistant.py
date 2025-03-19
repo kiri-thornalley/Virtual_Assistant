@@ -549,8 +549,8 @@ def fetch_calendar_events(calendar_service, time_min=None, time_max=None):
             continue
 
         # Meetings
-        if ('scheduled by task scheduler' not in description and 'supervision' not in description and 'teaching' not in description
-        and 'travel' not in event_summary and 'screen-free time' not in event_summary and 'supervision' not in event_summary and 'teaching' not in event_summary):
+        if ('scheduled by task scheduler' not in description and 'supervision' not in description and 'teaching' not in description and 'break' not in description
+        and 'travel' not in event_summary and 'screen-free time' not in event_summary and 'supervision' not in event_summary and 'teaching' not in event_summary and 'break' not in event_summary):
             meetings[event_id] = event
             occupied_slots.append((start_time, end_time))
 
@@ -1103,7 +1103,7 @@ def insert_breaks(occupied_slots):
     local_tz = pytz.timezone('Europe/London')
 
     # Extract unique dates where work tasks exist
-    unique_dates = set(slot[0].date() for slot in occupied_slots)
+    unique_dates = sorted(set(datetime.strptime(day, "%Y-%m-%d").date() if isinstance(day, str) else day for task in available_timeslots.values() for day in task.keys()))
 
     breaks_to_schedule = []  # Stores breaks separately for Google Calendar
 
@@ -1149,30 +1149,22 @@ def insert_breaks(occupied_slots):
             occupied_slots.append((morning_start, morning_end))  
             breaks_to_schedule.append((morning_start, morning_end))  
 
-        # Find and add lunch break (prefers 60 min but takes 30 min if necessary)
+        # Schedule lunch break (prefers 60 min, accepts 45, and forces 30 if necessary)
         available_lunch_slots = []
         current_start = lunch_start
-
         while current_start + timedelta(minutes=30) <= lunch_end:
-            potential_end = min(current_start + timedelta(minutes=60), lunch_end)
-
-            conflicts = any(
-                occupied_start < potential_end and occupied_end > current_start
-                for occupied_start, occupied_end in occupied_slots
-            )
-
-            if not conflicts:
-                available_lunch_slots.append((current_start, potential_end))
-
+            for duration in [60, 45, 30]:  # Try 60 first, then 45, then 30
+                potential_end = min(current_start + timedelta(minutes=duration), lunch_end)
+                if not any(occupied_start < potential_end and occupied_end > current_start for occupied_start, occupied_end in occupied_slots):
+                    available_lunch_slots.append((current_start, potential_end, duration))
+                    break  # Stop checking shorter durations if a valid slot is found
             current_start += timedelta(minutes=15)
-
+        
         if available_lunch_slots:
-            best_lunch_slot = max(available_lunch_slots, key=lambda x: x[1] - x[0])  # Pick longest slot
-        else:
-            best_lunch_slot = (lunch_start, lunch_start + timedelta(minutes=30))  # Force 30 min
-
-        occupied_slots.append(best_lunch_slot)
-        breaks_to_schedule.append(best_lunch_slot)
+            best_lunch_slot = max(available_lunch_slots, key=lambda x: x[2])  # Pick longest available slot
+            occupied_slots.append((best_lunch_slot[0], best_lunch_slot[1]))
+            breaks_to_schedule.append((best_lunch_slot[0], best_lunch_slot[1]))
+        
 
         # Find and add afternoon break (15 min, flexible)
         afternoon_start, afternoon_end = find_flexible_break(afternoon_start, afternoon_end)
@@ -1617,9 +1609,8 @@ if __name__ == "__main__":
         merged_scheduled_tasks = merge_scheduled_tasks(scheduled_tasks)
 
         # Insert Breaks
-        print("DEBUG: Calling insert_breaks()...")
         occupied_slots, breaks_to_schedule = insert_breaks(occupied_slots)
-        print("DEBUG: insert_breaks() finished execution.")
+        
         # 📝 Display the merged scheduled tasks
         print("\n📌 Scheduled Tasks:")
         for task in merged_scheduled_tasks:
